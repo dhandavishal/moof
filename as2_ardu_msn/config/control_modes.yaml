@@ -1,0 +1,14 @@
+# Control modes configuration for as2_platform_mavlink
+control_modes:
+  hover:
+    - "POSITION"
+  acro:
+    - "ATTITUDE"
+  manual:
+    - "MANUAL"
+  position:
+    - "POSITION"
+  velocity:
+    - "VELOCITY"
+  attitude:
+    - "ATTITUDE"

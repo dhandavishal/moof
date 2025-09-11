@@ -1,0 +1,22 @@
+survey_parameters:
+  # Survey area definition (meters from home position)
+  area_width: 50.0
+  area_length: 50.0
+  altitude: 10.0
+  
+  # Pattern parameters
+  line_spacing: 5.0
+  overlap_percentage: 20.0
+  
+  # Flight speeds
+  survey_speed: 2.0      # m/s during survey lines
+  transition_speed: 4.0  # m/s between lines
+  
+  # Origin offset from SITL home (meters)
+  origin_offset:
+    x: 10.0  # 10m East of home
+    y: 10.0  # 10m North of home
+  
+  # Mission options
+  auto_start: false  # Require manual confirmation
+  rtl_on_completion: true  # Return to launch after survey

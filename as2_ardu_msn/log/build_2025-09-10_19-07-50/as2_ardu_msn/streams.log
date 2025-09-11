@@ -1,0 +1,33 @@
+[0.897s] Invoking command in '/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn': PYTHONPATH=/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/as2_ardu_msn build --build-base /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build install --record /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/install.log --single-version-externally-managed install_data
+[1.221s] running egg_info
+[1.223s] creating build/as2_ardu_msn/as2_ardu_msn.egg-info
+[1.224s] writing build/as2_ardu_msn/as2_ardu_msn.egg-info/PKG-INFO
+[1.224s] writing dependency_links to build/as2_ardu_msn/as2_ardu_msn.egg-info/dependency_links.txt
+[1.224s] writing entry points to build/as2_ardu_msn/as2_ardu_msn.egg-info/entry_points.txt
+[1.224s] writing requirements to build/as2_ardu_msn/as2_ardu_msn.egg-info/requires.txt
+[1.225s] writing top-level names to build/as2_ardu_msn/as2_ardu_msn.egg-info/top_level.txt
+[1.225s] writing manifest file 'build/as2_ardu_msn/as2_ardu_msn.egg-info/SOURCES.txt'
+[1.227s] reading manifest file 'build/as2_ardu_msn/as2_ardu_msn.egg-info/SOURCES.txt'
+[1.229s] writing manifest file 'build/as2_ardu_msn/as2_ardu_msn.egg-info/SOURCES.txt'
+[1.230s] running build
+[1.230s] running build_py
+[1.230s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build
+[1.230s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build/lib
+[1.230s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build/lib/as2_ardu_msn
+[1.231s] copying as2_ardu_msn/__init__.py -> /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build/lib/as2_ardu_msn
+[1.231s] running install
+[1.231s] running install_lib
+[1.233s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages/as2_ardu_msn
+[1.233s] copying /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build/lib/as2_ardu_msn/__init__.py -> /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages/as2_ardu_msn
+[1.234s] byte-compiling /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages/as2_ardu_msn/__init__.py to __init__.cpython-310.pyc
+[1.234s] running install_data
+[1.234s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/share/ament_index
+[1.235s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/share/ament_index/resource_index
+[1.235s] creating /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/share/ament_index/resource_index/packages
+[1.235s] copying resource/as2_ardu_msn -> /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/share/ament_index/resource_index/packages
+[1.235s] copying package.xml -> /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/share/as2_ardu_msn
+[1.235s] running install_egg_info
+[1.240s] Copying build/as2_ardu_msn/as2_ardu_msn.egg-info to /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages/as2_ardu_msn-0.0.0-py3.10.egg-info
+[1.241s] running install_scripts
+[1.269s] writing list of installed files to '/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/install.log'
+[1.304s] Invoked command in '/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn' returned '0': PYTHONPATH=/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/install/as2_ardu_msn/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/as2_ardu_msn build --build-base /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/build install --record /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/build/as2_ardu_msn/install.log --single-version-externally-managed install_data

@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    # Required parameters for as2_platform_mavlink
+    max_thrust: 15.0  # Maximum thrust in Newtons (adjust for your drone)
+    min_thrust: 0.0   # Minimum thrust
+    
+    # Platform type
+    platform: "mavlink"
+    
+    # Reference frames
+    base_frame: "base_link"
+    global_frame: "earth"
+    odom_frame: "odom"
+    
+    # Safety limits
+    max_velocity_xy: 5.0
+    max_velocity_z: 2.0
+    max_yaw_rate: 0.5
+    
+    # Control modes file path
+    control_modes_file: "config/control_modes.yaml"
+
+    external_odom: true
