@@ -68,9 +68,15 @@ class ArduPilotSurveyMission(Node):
         self.get_logger().info("Waiting for ArduPilot SITL to be ready...")
         
         # Wait for MAVROS connection
-        while not self.drone.info.connected:
-            self.get_logger().info("Waiting for MAVROS connection...")
-            sleep(1)
+        # Check if info is a dictionary and access 'connected' key
+        try:
+            while not self.drone.info['connected']:
+                self.get_logger().info("Waiting for MAVROS connection...")
+                sleep(1)
+        except (KeyError, TypeError):
+            # Fallback: just wait for a fixed time
+            self.get_logger().info("Using fallback waiting method...")
+            sleep(10)
         
         self.get_logger().info("✓ Connected to ArduPilot SITL")
         

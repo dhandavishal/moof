@@ -1,0 +1,18 @@
+
+
+
+rm -rf build/as2_ardu_msn install/as2_ardu_msn && colcon build --packages-select as2_ardu_msn
+
+
+source install/setup.bash && ros2 launch as2_ardu_msn aerostack2_with_apm_launch.py
+
+
+source ardupilot/bin/activate 
+
+cd ardupilot/ardupilot/Tools/autotest
+
+./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
+
+
+cd /home/dhandavishal/aerostack2_ws/src/as2_ardu_msn
+./fix_stale_mission.sh

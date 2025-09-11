@@ -30,6 +30,7 @@ setup(
         'console_scripts': [
             'survey_mission = as2_ardu_msn.survey_mission:main',
             'simple_mission = scripts.simple_mission:main',
+            'clear_mission = scripts.clear_mission:main',
         ],
     },
 )
