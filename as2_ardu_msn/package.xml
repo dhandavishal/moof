@@ -2,9 +2,9 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>as2_ardu_msn</name>
-  <version>0.0.0</version>
-  <description>ArduPilot Survey Mission for Aerostack2</description>
-  <maintainer email="your_email@example.com">Your Name</maintainer>
+  <version>1.0.0</version>
+  <description>Modular ArduPilot Survey Mission Package for Aerostack2</description>
+  <maintainer email="dhandavishal@example.com">Vishal Dhanda</maintainer>
   <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
@@ -16,8 +16,11 @@
   <exec_depend>as2_platform_mavlink</exec_depend>
   <exec_depend>as2_state_estimator</exec_depend>
   <exec_depend>as2_motion_controller</exec_depend>
+  <exec_depend>as2_behaviors_motion</exec_depend>
   <exec_depend>mavros</exec_depend>
   <exec_depend>mavros_extras</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

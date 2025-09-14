@@ -1,6 +1,0 @@
-source;share/as2_ardu_msn/hook/pythonpath.ps1
-source;share/as2_ardu_msn/hook/pythonpath.dsv
-source;share/as2_ardu_msn/hook/pythonpath.sh
-source;share/as2_ardu_msn/hook/ament_prefix_path.ps1
-source;share/as2_ardu_msn/hook/ament_prefix_path.dsv
-source;share/as2_ardu_msn/hook/ament_prefix_path.sh

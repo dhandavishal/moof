@@ -1,0 +1,69 @@
+/**:
+  ros__parameters:
+    proportional_limitation: true
+    position_control:
+      reset_integral: false
+      antiwindup_cte: 0.5
+      alpha: 0.2
+      kp:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+      kd:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      ki:
+        x: 0.01
+        y: 0.01
+        z: 0.01
+    speed_control:
+      reset_integral: false
+      antiwindup_cte : 1.0
+      alpha: 0.3
+      kp:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+      kd:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      ki:
+        x: 0.01
+        y: 0.01
+        z: 0.01
+    # Attitude control (roll, pitch, yaw)
+    attitude_control:
+      reset_integral: false
+      antiwindup_cte: 1.0
+      alpha: 0.3
+      kp:
+        x: 4.0
+        y: 4.0
+        z: 1.0
+      kd:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      ki:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    # Angular rate control
+    angular_rate_control:
+      reset_integral: false
+      antiwindup_cte: 1.0
+      alpha: 0.3
+      kp:
+        x: 0.5
+        y: 0.5
+        z: 0.2
+      kd:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      ki:
+        x: 0.0
+        y: 0.0
+        z: 0.0
