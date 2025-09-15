@@ -1,0 +1,8 @@
+/**:
+  state_estimator:
+    ros__parameters:
+      plugin_name: "raw_odometry"
+      base_frame: "base_link"
+      global_frame: "earth"
+      odom_frame: "odom"
+      enable_tf: true

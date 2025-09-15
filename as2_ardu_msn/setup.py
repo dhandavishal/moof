@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 import os
 from glob import glob
 
@@ -7,7 +7,7 @@ package_name = 'as2_ardu_msn'
 setup(
     name=package_name,
     version='1.0.0',
-    packages=[],  # No Python packages since we use scripts
+    packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -18,9 +18,6 @@ setup(
         # Install config files
         (os.path.join('share', package_name, 'config'), 
             glob('config/*.yaml')),
-        # Install scripts
-        (os.path.join('share', package_name, 'scripts'), 
-            glob('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,7 +28,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # Scripts are run directly, no console entry points needed
+            'basic_survey_mission.py = as2_ardu_msn.basic_survey_mission:main',
         ],
     },
 )

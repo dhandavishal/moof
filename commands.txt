@@ -1,0 +1,29 @@
+-----------------------------------------------------------------
+
+rm -rf build/as2_ardu_msn install/as2_ardu_msn && colcon build --packages-select as2_ardu_msn
+
+-----------------------------------------------------------------
+
+source ~/aerostack2_ws/install/setup.b
+ash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py
+
+-----------------------------------------------------------------
+
+cd ~/aerostack2_ws && source install/setup.bash && python3 src/as2_ardu_msn/basic_survey_mission.py --config src/as2_ardu_msn/config/mission_config.yaml
+
+------------------------------------------------------------------
+
+cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
+
+------------------------------------------------------------------
+
+source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest
+
+-----------------------------------------------------------------
+
+aerostack2_ws/src/as2_ardu_msn$ python3 basic_survey_mission.py --config config/mission_config.yaml
+
+------------------------------------------------------------------
+
+ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
+
