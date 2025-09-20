@@ -1,0 +1,51 @@
+/**:
+  ros__parameters:
+    # Connection settings
+    fcu_url: "udp://:14550@127.0.0.1:14551"
+    gcs_url: ""
+    target_system_id: 1
+    target_component_id: 1
+    
+    # Plugin configuration for ArduPilot - minimal set to avoid conflicts
+    plugin_allowlist:
+      - 'sys_*'
+      - 'command'
+      - 'param'
+      - 'local_position'
+      - 'global_position'
+      - 'home_position'
+      - 'guided_target'  # Essential for ArduPilot GUIDED mode
+      
+    plugin_denylist: 
+      - 'setpoint_*'  # Deny all setpoint plugins to avoid conflicts with guided_target
+      - 'companion_process_status'  # Explicitly deny this problematic plugin
+      - 'debug_value'  # Deny debug_value plugin causing conflicts
+      
+    # Time sync
+    conn:
+      heartbeat_rate: 1.0
+      timeout: 10.0
+      timesync_rate: 10.0
+      system_time_rate: 1.0
+      
+    # Local position configuration
+    local_position:
+      frame_id: "map"
+      tf:
+        send: true
+        frame_id: "map"
+        child_frame_id: "base_link"
+        send_fcu: false
+        
+    # Global position configuration
+    global_position:
+      frame_id: "map"
+      tf:
+        send: false
+        frame_id: "map"
+        child_frame_id: "base_link"
+        
+    # System settings
+    sys:
+      disable_diag: false
+      min_voltage: [10.0]

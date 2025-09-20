@@ -2,7 +2,7 @@
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from ament_index_python.packages import get_package_share_directory
@@ -30,7 +30,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     mission_config = LaunchConfiguration('mission_config')
 
-    # MAVROS Launch (verified to be working)
+    # MAVROS Launch (fixed for SITL connection)
     mavros_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(mavros_dir, 'launch', 'apm.launch')
@@ -42,25 +42,30 @@ def generate_launch_description():
         }.items()
     )
 
-    # Aerostack2 Platform Node
-    platform_node = Node(
-        package='as2_platform_mavlink',
-        executable='as2_platform_mavlink_node',
-        name='platform',
-        namespace=drone_namespace,
-        parameters=[{
-            'max_thrust': 15.0,
-            'min_thrust': 0.0,
-            'platform': 'mavlink',
-            'base_frame': 'base_link',
-            'global_frame': 'earth',
-            'odom_frame': 'odom',
-            'mavros_namespace': '/mavros',
-            'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
-            'external_odom': True,
-                'use_sim_time': False,
-        }],
-        output='screen'
+    # Aerostack2 Platform Node (delayed to allow MAVROS to fully initialize)
+    platform_node = TimerAction(
+        period=5.0,  # 5 second delay
+        actions=[
+            Node(
+                package='as2_platform_mavlink',
+                executable='as2_platform_mavlink_node',
+                name='platform',
+                namespace=drone_namespace,
+                parameters=[{
+                    'max_thrust': 15.0,
+                    'min_thrust': 0.0,
+                    'platform': 'mavlink',
+                    'base_frame': 'base_link',
+                    'global_frame': 'earth',
+                    'odom_frame': 'odom',
+                    'mavros_namespace': '/mavros',
+                    'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
+                    'external_odom': True,
+                        'use_sim_time': False,
+                }],
+                output='screen'
+            )
+        ]
     )
 
     # Aerostack2 Core Stack (Estimator, Controller, Behaviors)

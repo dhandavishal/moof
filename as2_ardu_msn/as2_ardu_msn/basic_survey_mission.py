@@ -49,10 +49,25 @@ class BasicSurveyMission:
     
     def wait_for_drone_ready(self):
         print("Waiting for drone to be ready...")
-        self.drone.wait_for_connection()  # Use the built-in wait function
-        print("✓ Drone interface ready")
         
-        print("Waiting for behaviors to stabilize...")
+        # Wait for the drone interface to be ready
+        timeout = 30.0  # 30 seconds timeout
+        start_time = time.time()
+        
+        while (time.time() - start_time) < timeout:
+            try:
+                # Check if we can get the drone's position (indicates connection)
+                position = self.drone.position
+                print("✓ Drone interface ready")
+                break
+            except Exception:
+                print(".", end="", flush=True)
+                time.sleep(1)
+        else:
+            print("\n✗ Timeout waiting for drone connection")
+            return False
+        
+        print("\nWaiting for behaviors to stabilize...")
         time.sleep(5)
         
         print("✓ Drone ready")
@@ -67,16 +82,25 @@ class BasicSurveyMission:
             
             print("Phase 1: Arming and takeoff")
             print("Arming drone...")
-            self.drone.arm()
+            success = self.drone.arm()
+            if not success:
+                print("✗ Failed to arm drone")
+                return False
             print("✓ Drone armed")
             
             print("Setting offboard mode...")
-            self.drone.offboard()
+            success = self.drone.offboard()
+            if not success:
+                print("✗ Failed to set offboard mode")
+                return False
             print("✓ Offboard mode set")
             
             takeoff_height = self.config['altitude']
             print(f"Taking off to {takeoff_height}m...")
-            self.drone.takeoff(height=takeoff_height, speed=self.config['transition_speed'])
+            success = self.drone.takeoff(height=takeoff_height, speed=self.config['transition_speed'])
+            if not success:
+                print("✗ Takeoff failed")
+                return False
             print("✓ Takeoff complete")
             time.sleep(3)
             
@@ -107,12 +131,18 @@ class BasicSurveyMission:
                 print("✓ Returned to launch position")
             
             print("Phase 4: Landing")
-            self.drone.land(speed=1.0)
+            success = self.drone.land(speed=1.0)
+            if not success:
+                print("✗ Landing failed")
+                return False
             print("✓ Landing complete")
             
             print("Setting manual mode...")
-            self.drone.manual()
-            print("✓ Manual mode set")
+            success = self.drone.manual()
+            if not success:
+                print("✗ Failed to set manual mode")
+            else:
+                print("✓ Manual mode set")
 
             print("🎉 Basic survey mission completed successfully!")
             return True
@@ -144,8 +174,8 @@ def main():
             print(f"📍 Area: {mission.config['area_width']}m x {mission.config['area_length']}m")
             print(f"📏 Altitude: {mission.config['altitude']}m")
             print(f"📊 Waypoints: {len(mission.waypoints)}")
-            print("\nPress Enter to start mission or Ctrl+C to abort...")
-            input()
+            print("\nMission starting in 30 seconds...")
+            time.sleep(30)
         
         success = mission.execute_basic_mission()
         mission.drone.shutdown()

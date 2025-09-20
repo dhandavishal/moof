@@ -1,10 +1,7 @@
------------------------------------------------------------------
-
-rm -rf build/as2_ardu_msn install/as2_ardu_msn && colcon build --packages-select as2_ardu_msn
-
------------------------------------------------------------------
-
-source ~/aerostack2_ws/install/setup.bash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py
+cd ~/aerostack2_ws
+rm -rf build/ardupilot_survey_mission install/ardupilot_survey_mission
+colcon build --packages-select ardupilot_survey_mission
+source install/setup.bash
 
 -----------------------------------------------------------------
 
@@ -12,7 +9,11 @@ cd ~/aerostack2_ws && source install/setup.bash && python3 src/as2_ardu_msn/basi
 
 ------------------------------------------------------------------
 
-cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
+source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555 
+
+
+source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py 
+
 
 ------------------------------------------------------------------
 
@@ -26,3 +27,7 @@ aerostack2_ws/src/as2_ardu_msn$ python3 basic_survey_mission.py --config config/
 
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 
+****************************************************************************
+python3 survey_multi.py --width 20 --length 20 --altitude 3 --spacing 5 --auto-confirm --strategy parallel
+
+****************************************************************************

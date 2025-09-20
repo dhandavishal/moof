@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    plugin_name: "pid_speed_controller"
+    cmd_freq: 100.0
+    info_freq: 10.0
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    use_bypass: true
+    tf_timeout_threshold: 0.05

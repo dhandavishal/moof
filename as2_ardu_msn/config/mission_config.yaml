@@ -18,5 +18,5 @@ survey_parameters:
     y: 10.0  # 10m North of home
   
   # Mission options
-  auto_start: false  # Require manual confirmation
+  auto_start: true   # Automatically start mission
   rtl_on_completion: true  # Return to launch after survey

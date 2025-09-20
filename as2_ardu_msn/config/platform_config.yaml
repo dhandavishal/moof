@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    max_thrust: 15.0
+    min_thrust: 0.0
+    platform_name: "mavlink"
+    base_frame_id: "drone0/base_link"
+    global_ref_frame_id: "earth"
+    odom_frame_id: "drone0/odom"
+    mavros_namespace: "/mavros"
+    external_odom: true
+    use_sim_time: false
+    control_modes_file: "config/control_modes.yaml"
