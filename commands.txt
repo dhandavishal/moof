@@ -12,11 +12,12 @@ cd ~/aerostack2_ws && source install/setup.bash && python3 src/as2_ardu_msn/basi
 
 ------------------------------------------------------------------
 
-cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
+source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
 
 ------------------------------------------------------------------
 
-source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest
+source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py use_sim_time:=true
+
 
 -----------------------------------------------------------------
 
@@ -26,3 +27,10 @@ aerostack2_ws/src/as2_ardu_msn$ python3 basic_survey_mission.py --config config/
 
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 
+# The mission node must start last
+        TimerAction(period=7.0, actions=[survey_mission_node])
+
+
+pkill -f mavros
+pkill -f as2_ardu_msn
+pkill -f basic_survey_mission && pkill -f mavros && pkill -f as2

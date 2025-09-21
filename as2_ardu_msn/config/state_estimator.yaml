@@ -5,4 +5,36 @@
       base_frame: "base_link"
       global_frame: "earth"
       odom_frame: "odom"
+      enable_tf: true/**:
+  state_estimator:
+    ros__parameters:
+      plugin_name: "raw_odometry"
+      base_frame: "drone0/base_link"
+      global_frame: "earth"
+      odom_frame: "drone0/odom"
       enable_tf: true
+      # CRITICAL: Increase TF timeout threshold as per Aerostack2 documentation
+      tf_timeout_threshold: 0.1  # Increased from default 0.05 to handle timing issues
+      
+      # Raw odometry plugin parameters
+      raw_odometry:
+        use_sim_time: false
+        base_frame: "drone0/base_link"
+        global_frame: "earth"
+        odom_frame: "drone0/odom"
+        enable_tf: true
+        
+        # Source topic for odometry data from MAVROS
+        odometry_topic: "/drone0/mavros/local_position/odom"
+        
+        # TF timing parameters - optimized for ArduPilot
+        tf_future_tolerance: 0.15  # Allow 150ms future timestamps
+        tf_cache_time: 10.0        # Keep 10 seconds of transform history
+        tf_extrapolation_limit: 0.2  # Allow 200ms extrapolation
+        
+        # Publishing rates - synchronized with ArduPilot/MAVROS
+        odom_publish_rate: 30.0  # Hz - ArduPilot typical rate
+        tf_publish_rate: 30.0    # Hz - match odom rate
+        
+        # Use latest transform when exact time not available
+        use_latest_transform_available: true

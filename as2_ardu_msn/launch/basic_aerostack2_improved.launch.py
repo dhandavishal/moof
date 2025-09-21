@@ -5,11 +5,12 @@ from launch_ros.actions import Node, PushRosNamespace
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, TimerAction
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
-    # Get the package directory to locate config files
+    # It's good practice to get the package directory to locate config files
     pkg_name = 'as2_ardu_msn'
     pkg_dir = get_package_share_directory(pkg_name)
     
@@ -17,7 +18,8 @@ def generate_launch_description():
     
     # Declare launch arguments
     drone_namespace_arg = DeclareLaunchArgument('drone_namespace', default_value='drone0')
-    use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='true')
+    use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false')
+    enable_tf_diagnostics_arg = DeclareLaunchArgument('enable_tf_diagnostics', default_value='false')
     mission_config_arg = DeclareLaunchArgument(
         'mission_config',
         default_value=os.path.join(pkg_dir, 'config', 'mission_config.yaml'),
@@ -27,9 +29,10 @@ def generate_launch_description():
     # Launch Configurations
     drone_namespace = LaunchConfiguration('drone_namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    enable_tf_diagnostics = LaunchConfiguration('enable_tf_diagnostics')
     mission_config = LaunchConfiguration('mission_config')
 
-    # MAVROS Launch - wrapped in namespace group
+    # MAVROS Launch - wrapped in namespace group with improved timesync config
     mavros_launch = GroupAction([
         PushRosNamespace(drone_namespace),
         IncludeLaunchDescription(
@@ -40,24 +43,14 @@ def generate_launch_description():
                 'fcu_url': 'udp://:14555@127.0.0.1:14550',
                 'tgt_system': '1',
                 'tgt_component': '1',
-                'config_yaml': os.path.join(pkg_dir, 'config', 'mavros_timing_fix.yaml'),
+                'config_yaml': os.path.join(pkg_dir, 'config', 'mavros_timesync.yaml'),
             }.items()
         )
     ])
 
-    # Static transform publisher to connect earth to drone0/odom
-    # This is a backup in case ground_truth plugin doesn't create this transform
-    static_tf_earth_to_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='earth_to_odom_broadcaster',
-        arguments=['0', '0', '0', '0', '0', '0', 'earth', 'drone0/odom'],
-        output='screen'
-    )
-
     # Aerostack2 Platform Node (delayed to allow MAVROS to fully initialize)
     platform_node = TimerAction(
-        period=5.0,  # 5 second delay
+        period=10.0,  # 10 second delay
         actions=[
             Node(
                 package='as2_platform_mavlink',
@@ -68,20 +61,15 @@ def generate_launch_description():
                     'max_thrust': 15.0,
                     'min_thrust': 0.0,
                     'platform': 'mavlink',
-                    'base_frame': 'drone0/base_link',
+                    'base_frame': 'base_link',
                     'global_frame': 'earth',
-                    'odom_frame': 'drone0/odom',
-                    'mavros_namespace': 'mavros',
+                    'odom_frame': 'odom',
+                    'mavros_namespace': 'mavros',  # MAVROS is now in the same namespace
                     'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
                     'external_odom': True,
-                    'use_sim_time': use_sim_time,
-                    # CRITICAL TF parameters as per Aerostack2 documentation
-                    'tf_timeout_threshold': 0.15,  # Increased from 0.05 default to handle TF lag
-                    'tf_timeout': 0.2,  # Timeout for TF lookups
-                    # Add platform info publishing rate to ensure regular state updates
-                    'platform_info_pub_rate': 10.0,  # Hz - ensures regular PlatformInfo publishing
-                    'tf_tolerance': 0.1,  # Tolerance for TF timing
-                    'tf_buffer_size': 20.0,  # Increase buffer size
+                    'use_sim_time': False,
+                    'tf_timeout_threshold': 0.15,  # Increased timeout for TF lookups
+                    'publish_rate': 50.0,  # Hz - consistent with state estimator
                 }],
                 output='screen'
             )
@@ -89,14 +77,13 @@ def generate_launch_description():
     )
 
     # Aerostack2 Core Stack (Estimator, Controller, Behaviors)
-    # Using raw_odometry plugin which is simpler for ArduPilot
     state_estimator_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(get_package_share_directory('as2_state_estimator'), 'launch', 'state_estimator_launch.py')
         ),
         launch_arguments={
             'namespace': drone_namespace,
-            'plugin_name': 'raw_odometry',  # Back to raw_odometry - simpler for ArduPilot
+            'plugin_name': 'ground_truth',  # Using ground_truth plugin from config
             'use_sim_time': use_sim_time,
             'config_file': os.path.join(pkg_dir, 'config', 'state_estimator.yaml'),
         }.items()
@@ -125,6 +112,15 @@ def generate_launch_description():
         }.items()
     )
 
+    # TF Diagnostics Node (optional)
+    tf_diagnostics_node = Node(
+        package='as2_ardu_msn',
+        executable='tf_diagnostics.py',
+        name='tf_diagnostics',
+        output='screen',
+        condition=IfCondition(enable_tf_diagnostics)
+    )
+
     # Your Custom Mission Node
     survey_mission_node = Node(
         package=pkg_name,
@@ -138,25 +134,15 @@ def generate_launch_description():
     return LaunchDescription([
         drone_namespace_arg,
         use_sim_time_arg,
+        enable_tf_diagnostics_arg,
         mission_config_arg,
         
-        # Start MAVROS first
         mavros_launch,
-        
-        # Add static TF publisher for earth -> odom connection
-        static_tf_earth_to_odom,
-        
-        # Then platform node
         platform_node,
-        
-        # Then the state estimator with ground_truth plugin
         state_estimator_launch,
-        
-        # Then controller and behaviors
         motion_controller_launch,
         motion_behaviors_launch,
-        
-    # The mission node needs to start AFTER platform is fully ready
-    # Platform starts at 5s, give it time to initialize and begin publishing
-    TimerAction(period=20.0, actions=[survey_mission_node]),  # Increased from 15s to 20s
+        tf_diagnostics_node,
+        # The mission node must start last
+        TimerAction(period=25.0, actions=[survey_mission_node]),
     ])

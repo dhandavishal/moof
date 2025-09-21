@@ -1,0 +1,26 @@
+/**:
+  mavros:
+    ros__parameters:
+      # Completely disable timesync to eliminate RTT spikes
+      timesync_rate: 0.0  # Disable timesync completely
+      system_time_rate: 0.0  # Disable system time updates
+      
+      # Increase all timeouts significantly
+      conn:
+        timeout: 60.0  # Very long connection timeout
+        heartbeat_timeout: 60.0  # Long heartbeat timeout
+        
+      # Reduce rates for all time-sensitive operations
+      param:
+        force_pull: false  # Don't force parameter pulls
+        pull_after_gcs: false  # Don't pull after GCS
+        
+      # Plugin blacklist - disable all timing-sensitive plugins
+      plugin_blacklist:
+        - "obstacle_distance"
+        - "trajectory" 
+        - "vibration"
+        - "wheel_odometry"
+        - "sys_time"  # Disable system time plugin
+        - "mocap_pose_estimate"  # Disable mocap timing
+        - "vision_pose"  # Disable vision pose timing
