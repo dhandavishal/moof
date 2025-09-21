@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, TimerAction
+from launch_ros.actions import Node, PushRosNamespace
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, TimerAction
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from ament_index_python.packages import get_package_share_directory
@@ -10,8 +10,7 @@ import os
 
 def generate_launch_description():
     # It's good practice to get the package directory to locate config files
-    # Replace 'your_package_name' with the actual name of your ROS 2 package
-    pkg_name = 'as2_ardu_msn' # <--- CHANGE THIS TO YOUR PACKAGE NAME
+    pkg_name = 'as2_ardu_msn'
     pkg_dir = get_package_share_directory(pkg_name)
     
     mavros_dir = get_package_share_directory('mavros')
@@ -30,21 +29,24 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     mission_config = LaunchConfiguration('mission_config')
 
-    # MAVROS Launch (fixed for SITL connection)
-    mavros_launch = IncludeLaunchDescription(
-        AnyLaunchDescriptionSource(
-            os.path.join(mavros_dir, 'launch', 'apm.launch')
-        ),
-        launch_arguments={
-            'fcu_url': 'udp://:14555@127.0.0.1:14550',
-            'tgt_system': '1',
-            'tgt_component': '1',
-        }.items()
-    )
+    # MAVROS Launch - wrapped in namespace group
+    mavros_launch = GroupAction([
+        PushRosNamespace(drone_namespace),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(mavros_dir, 'launch', 'apm.launch')
+            ),
+            launch_arguments={
+                'fcu_url': 'udp://:14555@127.0.0.1:14550',
+                'tgt_system': '1',
+                'tgt_component': '1',
+            }.items()
+        )
+    ])
 
     # Aerostack2 Platform Node (delayed to allow MAVROS to fully initialize)
     platform_node = TimerAction(
-        period=5.0,  # 5 second delay
+        period=10.0,  # 10 second delay
         actions=[
             Node(
                 package='as2_platform_mavlink',
@@ -58,10 +60,10 @@ def generate_launch_description():
                     'base_frame': 'base_link',
                     'global_frame': 'earth',
                     'odom_frame': 'odom',
-                    'mavros_namespace': '/mavros',
+                    'mavros_namespace': 'mavros',  # MAVROS is now in the same namespace
                     'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
                     'external_odom': True,
-                        'use_sim_time': False,
+                    'use_sim_time': False,
                 }],
                 output='screen'
             )
@@ -69,7 +71,6 @@ def generate_launch_description():
     )
 
     # Aerostack2 Core Stack (Estimator, Controller, Behaviors)
-    # This assumes standard config files are present in your package's 'config' directory
     state_estimator_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(get_package_share_directory('as2_state_estimator'), 'launch', 'state_estimator_launch.py')
@@ -108,12 +109,13 @@ def generate_launch_description():
     # Your Custom Mission Node
     survey_mission_node = Node(
         package=pkg_name,
-        executable='basic_survey_mission.py', # Assumes this is an entry point in setup.py
+        executable='basic_survey_mission.py',
         name='survey_mission_node',
         namespace=drone_namespace,
         output='screen',
         arguments=['--config', mission_config],
     )
+    
     return LaunchDescription([
         drone_namespace_arg,
         use_sim_time_arg,
