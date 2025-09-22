@@ -29,7 +29,6 @@ setup(
     entry_points={
         'console_scripts': [
             'basic_survey_mission.py = as2_ardu_msn.basic_survey_mission:main',
-            'takeoff_mission.py = as2_ardu_msn.takeoff_mission:main',
         ],
     },
 )

@@ -3,7 +3,13 @@
     plugin_name: "pid_speed_controller"
     cmd_freq: 100.0
     info_freq: 10.0
-    odom_frame_id: "odom"
-    base_frame_id: "base_link"
-    use_bypass: true
-    tf_timeout_threshold: 0.05
+
+    # Namespaced frames to match estimator and mission
+    odom_frame_id: "drone0/odom"
+    base_frame_id: "drone0/base_link"
+
+    # Controller should not bypass control law during takeoff
+    use_bypass: false
+
+    # Match TF tolerance used elsewhere to avoid transient lookup failures
+    tf_timeout_threshold: 0.15

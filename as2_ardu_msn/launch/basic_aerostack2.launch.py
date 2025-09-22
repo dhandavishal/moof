@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node, PushRosNamespace
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, TimerAction
 from launch.launch_description_sources import AnyLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -64,25 +64,13 @@ def generate_launch_description():
                 executable='as2_platform_mavlink_node',
                 name='platform',
                 namespace=drone_namespace,
-                parameters=[{
-                    'max_thrust': 15.0,
-                    'min_thrust': 0.0,
-                    'platform': 'mavlink',
-                    'base_frame': 'drone0/base_link',
-                    'global_frame': 'earth',
-                    'odom_frame': 'drone0/odom',
-                    'mavros_namespace': 'mavros',
-                    'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
-                    'external_odom': True,
-                    'use_sim_time': use_sim_time,
-                    # CRITICAL TF parameters as per Aerostack2 documentation
-                    'tf_timeout_threshold': 0.15,  # Increased from 0.05 default to handle TF lag
-                    'tf_timeout': 0.2,  # Timeout for TF lookups
-                    # Add platform info publishing rate to ensure regular state updates
-                    'platform_info_pub_rate': 10.0,  # Hz - ensures regular PlatformInfo publishing
-                    'tf_tolerance': 0.1,  # Tolerance for TF timing
-                    'tf_buffer_size': 20.0,  # Increase buffer size
-                }],
+                parameters=[
+                    os.path.join(pkg_dir, 'config', 'platform_params.yaml'),
+                    {
+                        'use_sim_time': use_sim_time,
+                        'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
+                    }
+                ],
                 output='screen'
             )
         ]
@@ -156,7 +144,7 @@ def generate_launch_description():
         motion_controller_launch,
         motion_behaviors_launch,
         
-    # The mission node needs to start AFTER platform is fully ready
-    # Platform starts at 5s, give it time to initialize and begin publishing
-    TimerAction(period=20.0, actions=[survey_mission_node]),  # Increased from 15s to 20s
+    # The mission node previously had a 25s delay which caused it to miss early latched/platform state messages.
+    # Start it earlier (5s after other core nodes) so subscriptions are active sooner.
+    TimerAction(period=15.0, actions=[survey_mission_node]),
     ])
