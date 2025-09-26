@@ -9,7 +9,7 @@ survey_parameters:
   overlap_percentage: 20.0
   
   # Flight speeds
-  survey_speed: 2.0      # m/s during survey lines
+  flight_speed: 2.0      # m/s during survey lines (renamed from survey_speed)
   transition_speed: 4.0  # m/s between lines
   
   # Origin offset from SITL home (meters)

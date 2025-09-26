@@ -3,6 +3,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node, PushRosNamespace
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
 from ament_index_python.packages import get_package_share_directory
@@ -18,6 +19,7 @@ def generate_launch_description():
     # Declare launch arguments
     drone_namespace_arg = DeclareLaunchArgument('drone_namespace', default_value='drone0')
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='true')
+    use_state_estimator_arg = DeclareLaunchArgument('use_state_estimator', default_value='false')
     mission_config_arg = DeclareLaunchArgument(
         'mission_config',
         default_value=os.path.join(pkg_dir, 'config', 'mission_config.yaml'),
@@ -27,6 +29,7 @@ def generate_launch_description():
     # Launch Configurations
     drone_namespace = LaunchConfiguration('drone_namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    use_state_estimator = LaunchConfiguration('use_state_estimator')
     mission_config = LaunchConfiguration('mission_config')
 
     # MAVROS Launch - wrapped in namespace group
@@ -46,7 +49,7 @@ def generate_launch_description():
     ])
 
     # Static transform publisher to connect earth to drone0/odom
-    # This is a backup in case ground_truth plugin doesn't create this transform
+    # This is backup in case ground_truth plugin doesn't create this transform
     static_tf_earth_to_odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -55,65 +58,21 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Aerostack2 Platform Node (delayed to allow MAVROS to fully initialize)
-    platform_node = TimerAction(
-        period=5.0,  # 5 second delay
-        actions=[
-            Node(
-                package='as2_platform_mavlink',
-                executable='as2_platform_mavlink_node',
-                name='platform',
-                namespace=drone_namespace,
-                parameters=[
-                    os.path.join(pkg_dir, 'config', 'platform_params.yaml'),
-                    {
-                        'use_sim_time': use_sim_time,
-                        'control_modes_file': os.path.join(pkg_dir, 'config', 'control_modes.yaml'),
-                    }
-                ],
-                output='screen'
-            )
-        ]
-    )
-
-    # Aerostack2 Core Stack (Estimator, Controller, Behaviors)
-    # Using raw_odometry plugin which is simpler for ArduPilot
+    # Optional: State estimator for TF and odometry (disabled by default for direct MAVROS)
     state_estimator_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(get_package_share_directory('as2_state_estimator'), 'launch', 'state_estimator_launch.py')
         ),
         launch_arguments={
             'namespace': drone_namespace,
-            'plugin_name': 'raw_odometry',  # Back to raw_odometry - simpler for ArduPilot
+            'plugin_name': 'raw_odometry',  # Simple odometry for ArduPilot
             'use_sim_time': use_sim_time,
             'config_file': os.path.join(pkg_dir, 'config', 'state_estimator.yaml'),
-        }.items()
+        }.items(),
+        condition=IfCondition(use_state_estimator)
     )
 
-    motion_controller_launch = IncludeLaunchDescription(
-        AnyLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('as2_motion_controller'), 'launch', 'controller_launch.py')
-        ),
-        launch_arguments={
-            'namespace': drone_namespace,
-            'plugin_name': 'pid_speed_controller',
-            'use_sim_time': use_sim_time,
-            'plugin_config_file': os.path.join(pkg_dir, 'config', 'pid_speed_controller.yaml'),
-        }.items()
-    )
-
-    motion_behaviors_launch = IncludeLaunchDescription(
-        AnyLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('as2_behaviors_motion'), 'launch', 'motion_behaviors_launch.py')
-        ),
-        launch_arguments={
-            'namespace': drone_namespace,
-            'use_sim_time': use_sim_time,
-            'config_file': os.path.join(pkg_dir, 'config', 'motion_behaviors.yaml'),
-        }.items()
-    )
-
-    # Your Custom Mission Node
+    # Direct MAVROS Mission Node (no delay needed, simpler dependencies)
     survey_mission_node = Node(
         package=pkg_name,
         executable='basic_survey_mission.py',
@@ -126,6 +85,7 @@ def generate_launch_description():
     return LaunchDescription([
         drone_namespace_arg,
         use_sim_time_arg,
+        use_state_estimator_arg,
         mission_config_arg,
         
         # Start MAVROS first
@@ -134,17 +94,9 @@ def generate_launch_description():
         # Add static TF publisher for earth -> odom connection
         static_tf_earth_to_odom,
         
-        # Then platform node
-        platform_node,
-        
-        # Then the state estimator with ground_truth plugin
+        # Optional state estimator (disabled by default)
         state_estimator_launch,
         
-        # Then controller and behaviors
-        motion_controller_launch,
-        motion_behaviors_launch,
-        
-    # The mission node previously had a 25s delay which caused it to miss early latched/platform state messages.
-    # Start it earlier (5s after other core nodes) so subscriptions are active sooner.
-    TimerAction(period=15.0, actions=[survey_mission_node]),
+        # Direct MAVROS mission node (start after 5s to allow MAVROS initialization)
+        TimerAction(period=5.0, actions=[survey_mission_node]),
     ])

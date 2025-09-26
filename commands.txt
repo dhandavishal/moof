@@ -8,7 +8,7 @@ source ~/aerostack2_ws/install/setup.bash && ros2 launch as2_ardu_msn basic_aero
 
 -----------------------------------------------------------------
 
-cd ~/aerostack2_ws && source install/setup.bash && python3 src/as2_ardu_msn/basic_survey_mission.py --config src/as2_ardu_msn/config/mission_config.yaml
+source install/setup.bash && ros2 launch as2_ardu_msn direct_mavros_mission.launch.py
 
 ------------------------------------------------------------------
 

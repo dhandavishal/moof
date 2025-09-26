@@ -3,7 +3,6 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
-from rclpy.action import ActionClient
 import yaml
 import numpy as np
 import time
@@ -11,137 +10,98 @@ from threading import Thread
 import argparse
 import sys
 from rclpy.utilities import remove_ros_args
-import tf2_ros
-from rclpy.time import Time
-import rclpy.duration
 
-# Aerostack2 imports
-from as2_python_api.drone_interface import DroneInterface
-from as2_msgs.action import Takeoff, GoToWaypoint, Land
-from as2_msgs.msg import PlatformInfo, YawMode
-from geometry_msgs.msg import TwistStamped, PoseStamped
-from mavros_msgs.srv import SetMode, CommandBool
+# Direct MAVROS imports
+from mavros_msgs.srv import SetMode, CommandBool, CommandTOL
+from mavros_msgs.msg import State, GlobalPositionTarget, PositionTarget
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import NavSatFix
+from std_msgs.msg import Header
 
 class BasicSurveyMission(Node):
     def __init__(self, config_file):
         super().__init__('survey_mission_node')
-        
-        # Set TF timeout parameters as per documentation
-        self.declare_parameter('tf_timeout_threshold', 0.15)  # Increased from default 0.05
         
         # Load configuration
         self.get_logger().info(f"Loading config from: {config_file}")
         with open(config_file, 'r') as f:
             self.config = yaml.safe_load(f)['survey_parameters']
         
-        # Initialize platform state tracking
-        self.platform_state = None
-        self.platform_info = None  # full PlatformInfo message cache
+        # Initialize state tracking
+        self.mavros_state = None
         self.current_position = None
         self.gps_status = None
         self.is_armed = False
-        self.is_flying = False
+        self.is_offboard = False
         
-        # QoS settings matching typical Aerostack2 publishers:
-        #  - platform/info: reliable + volatile
-        #  - pose topics (sensor/self localization): best effort + volatile
-        platform_qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            durability=QoSDurabilityPolicy.VOLATILE
-        )
-        pose_qos = QoSProfile(
+        # Flight parameters
+        self.takeoff_altitude = 5.0  # meters
+        self.flight_speed = 2.0  # m/s
+        self.waypoint_tolerance = 1.0  # meters (increased for more reliable waypoint achievement)
+        
+        # QoS settings for MAVROS topics
+        mavros_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10,
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             durability=QoSDurabilityPolicy.VOLATILE
         )
 
-        # Subscribe to platform info to track state
-        self.platform_info_sub = self.create_subscription(
-            PlatformInfo,
-            '/drone0/platform/info',  # Full namespace path
-            self.platform_info_callback,
-            platform_qos
+        # Subscribe to MAVROS state
+        self.state_sub = self.create_subscription(
+            State,
+            'mavros/state',
+            self.state_callback,
+            mavros_qos
         )
 
-        # Primary pose source
+        # Subscribe to local position
         self.pose_sub = self.create_subscription(
             PoseStamped,
-            'sensor_measurements/pose',
+            'mavros/local_position/pose',
             self.pose_callback,
-            pose_qos
-        )
-
-        # Fallback pose from self_localization (some Aerostack2 setups publish pose here)
-        self.fallback_pose_sub = self.create_subscription(
-            PoseStamped,
-            'self_localization/pose',
-            self.pose_callback,
-            pose_qos
+            mavros_qos
         )
         
-        # Subscribe to GPS for pre-arm checks (QoS matching MAVROS BEST_EFFORT)
-        gps_qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,  # Match MAVROS
-            durability=QoSDurabilityPolicy.VOLATILE
-        )
+        # Subscribe to GPS for pre-arm checks
         self.gps_sub = self.create_subscription(
             NavSatFix,
             'mavros/global_position/global',
             self.gps_callback,
-            gps_qos
+            mavros_qos
         )
         
-        # Create MAVROS service clients
-        self.set_mode_client = self.create_client(
-            SetMode, 
-            'mavros/set_mode'  # Relative path - namespace is handled by node launch
+        # Publishers for setpoints
+        self.local_pos_pub = self.create_publisher(
+            PoseStamped,
+            'mavros/setpoint_position/local',
+            mavros_qos
         )
         
-        self.arm_client = self.create_client(
-            CommandBool,
-            'mavros/cmd/arming'  # Relative path - namespace is handled by node launch
-        )
+        # Service clients
+        self.set_mode_client = self.create_client(SetMode, 'mavros/set_mode')
+        self.arm_client = self.create_client(CommandBool, 'mavros/cmd/arming')
+        self.takeoff_client = self.create_client(CommandTOL, 'mavros/cmd/takeoff')
+        self.land_client = self.create_client(CommandTOL, 'mavros/cmd/land')
         
-        # Create Aerostack2 action clients
-        self.takeoff_client = ActionClient(self, Takeoff, 'TakeoffBehavior')  # Relative path - namespace is handled by node launch
-        self.goto_client = ActionClient(self, GoToWaypoint, 'GoToBehavior')  # Relative path - namespace is handled by node launch
-        self.land_client = ActionClient(self, Land, 'LandBehavior')  # Relative path - namespace is handled by node launch
-        
-        # Initialize action clients for drone operations
-        self.drone_interface = DroneInterface(
-            'drone0', 
-            verbose=True,
-            use_sim_time=True,
-            spin_rate=20.0
-        )
-        
-        # Initialize TF buffer and listener for readiness checks
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        
+        # Generate waypoints
         self.waypoints = self.generate_simple_pattern()
+        self.current_waypoint_index = 0
+        
         self.get_logger().info(f"Generated {len(self.waypoints)} waypoints for basic survey")
+        self.get_logger().info("Direct MAVROS mission node initialized")
     
-    def platform_info_callback(self, msg):
-        """Track platform state changes"""
-        self.get_logger().info(f"🔄 Platform callback received! State: {msg.status.state}, Armed: {msg.armed}")
-        # cache entire message for later detailed checks
-        self.platform_info = msg
-        if self.platform_state != msg.status.state:
-            self.get_logger().info(f"Platform state changed: {msg.status.state}")
-            self.platform_state = msg.status.state
-        # Always update these (even if same state) to keep them current
+    def state_callback(self, msg):
+        """Track MAVROS state changes"""
+        if self.mavros_state is None or self.mavros_state.armed != msg.armed:
+            self.get_logger().info(f"🔄 MAVROS state - Armed: {msg.armed}, Mode: {msg.mode}, Connected: {msg.connected}")
+        
+        self.mavros_state = msg
         self.is_armed = msg.armed
-        self.is_flying = (msg.status.state in [3, 4, 5])  # TAKING_OFF, FLYING, LANDING
+        self.is_offboard = (msg.mode == "OFFBOARD")
     
     def pose_callback(self, msg):
-        """Track current position"""
+        """Track current position from MAVROS local position"""
         self.get_logger().info(f"📍 Pose callback received! Position: {msg.pose.position.x:.2f}, {msg.pose.position.y:.2f}, {msg.pose.position.z:.2f}")
         self.current_position = [
             msg.pose.position.x,
@@ -207,338 +167,207 @@ class BasicSurveyMission(Node):
             self.get_logger().error(f"Error setting mode: {e}")
             return False
     
-    def arm_drone_aerostack2(self):
-        """Arm the drone using Aerostack2 DroneInterface (proper FSM transition)"""
-        self.get_logger().info("🔧 Arming via Aerostack2 DroneInterface...")
+    def arm_drone(self):
+        """Arm the drone using direct MAVROS commands"""
+        self.get_logger().info("🔧 Arming via direct MAVROS...")
+        
+        if not self.arm_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error("MAVROS arming service not available")
+            return False
         
         try:
-            # Use DroneInterface to arm (this updates the platform FSM properly)
-            success = self.drone_interface.arm()
-            if success:
-                self.get_logger().info("✅ Drone armed successfully via Aerostack2")
-                
-                # Give the system a moment to update
-                time.sleep(0.5)
-                
-                # Double-check via DroneInterface info
-                try:
-                    drone_info = self.drone_interface.info
-                    if drone_info.get('armed', False):
-                        self.get_logger().info("✅ DroneInterface confirms armed status")
-                        return True
-                    else:
-                        self.get_logger().warn("⚠️  DroneInterface arm succeeded but info shows not armed")
-                except Exception as e:
-                    self.get_logger().warn(f"Could not verify armed status via DroneInterface: {e}")
-                
-                # Even if we can't confirm, trust the successful arm() call
+            request = CommandBool.Request()
+            request.value = True
+            
+            future = self.arm_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+            
+            if future.result() and future.result().success:
+                self.get_logger().info("✅ Drone armed successfully via MAVROS")
                 return True
             else:
-                self.get_logger().error("❌ Failed to arm via Aerostack2")
+                result = future.result()
+                if result:
+                    self.get_logger().error(f"❌ Failed to arm: {result.result}")
+                else:
+                    self.get_logger().error("❌ Failed to arm: timeout")
                 return False
         except Exception as e:
-            self.get_logger().error(f"Error arming via Aerostack2: {e}")
+            self.get_logger().error(f"Error arming via MAVROS: {e}")
             return False
     
     def wait_for_armed_state(self, timeout_sec=15.0):
-        """Wait for platform to report armed state after arming command.
-
-        With improved tolerance for high RTT and communication delays.
-        """
-        self.get_logger().info("🔍 Waiting for platform armed state confirmation...")
+        """Wait for MAVROS to report armed state after arming command"""
+        self.get_logger().info("🔍 Waiting for MAVROS armed state confirmation...")
         
-        # Debug: Check if we've received any platform info at all
-        if self.platform_info is None:
-            self.get_logger().warn("⚠️  No platform info received yet - will rely on DroneInterface")
-
         start_time = time.time()
         last_log = 0.0
-        confirmed_via_interface = False
         
         while (time.time() - start_time) < timeout_sec:
-            # Primary check: Platform info callback
-            if self.platform_info is not None:
-                armed_state = self.platform_info.armed
-                state = self.platform_info.status.state
-
-                now = time.time()
-                if now - last_log > 2.0:  # Reduced log frequency for high RTT tolerance
-                    self.get_logger().info(f"Platform state: {state}, Armed: {armed_state}")
-                    last_log = now
-
-                if armed_state and state != 0:
-                    self.get_logger().info("✅ Platform confirmed armed state")
-                    return True
+            # Check MAVROS state for armed confirmation
+            if self.mavros_state and self.mavros_state.armed:
+                self.get_logger().info("✅ MAVROS confirms armed state")
+                return True
             
-            # Fallback check: DroneInterface info - more aggressive for high RTT scenarios
-            try:
-                drone_info = self.drone_interface.info
-                armed_from_interface = drone_info.get('armed', False)
-                state_from_interface = drone_info.get('state', 'unknown')
-                
-                # If DroneInterface shows armed consistently, accept it after some time
-                if armed_from_interface:
-                    if not confirmed_via_interface:
-                        self.get_logger().info("✅ DroneInterface confirms armed state")
-                        confirmed_via_interface = True
-                        first_confirmation_time = time.time()
-                    elif (time.time() - first_confirmation_time) > 2.0:  # Wait 2s for consistency
-                        self.get_logger().info("✅ DroneInterface consistently shows armed - proceeding!")
-                        return True
+            # Periodic logging
+            now = time.time()
+            if now - last_log > 2.0:
+                if self.mavros_state:
+                    self.get_logger().info(f"MAVROS state: Mode={self.mavros_state.mode}, Armed={self.mavros_state.armed}")
                 else:
-                    confirmed_via_interface = False
-                    
-            except Exception as e:
-                self.get_logger().debug(f"DroneInterface check failed: {e}")
-
-            time.sleep(0.2)  # Longer sleep for high RTT tolerance
-            rclpy.spin_once(self, timeout_sec=0.05)  # Process callbacks
-
-        # Even if platform info times out, proceed if DroneInterface shows armed
-        if confirmed_via_interface:
-            self.get_logger().warn("⚠️  Platform info confirmation timeout, but DroneInterface shows armed - proceeding")
-            return True
+                    self.get_logger().info("Waiting for MAVROS state...")
+                last_log = now
             
-        self.get_logger().error("❌ Platform did not confirm armed state within timeout")
+            time.sleep(0.1)
+            rclpy.spin_once(self, timeout_sec=0.01)
+        
+        self.get_logger().error("⏰ Timeout waiting for armed state confirmation")
         return False
     
-    def set_offboard_mode(self):
-        """Enable offboard control (GUIDED mode for ArduPilot, OFFBOARD for PX4)"""
-        self.get_logger().info("🔄 Enabling offboard control...")
-        
-        try:
-            # Use DroneInterface offboard method (platform will use GUIDED for ArduPilot)
-            success = self.drone_interface.offboard()
-            if success:
-                self.get_logger().info("✅ Offboard control enabled successfully")
-                time.sleep(1.0)  # Allow mode transition
-                return True
-            else:
-                self.get_logger().error("❌ Failed to enable offboard control")
-                return False
-        except Exception as e:
-            self.get_logger().error(f"Error enabling offboard control: {e}")
-            return False
-    
-    def takeoff_aerostack2(self, altitude):
-        """Takeoff using Aerostack2 action with proper feedback handling"""
+    def takeoff_mavros(self, altitude):
+        """Takeoff using direct MAVROS commands"""
         self.get_logger().info(f"Taking off to altitude: {altitude}m")
         
-        if not self.takeoff_client.wait_for_server(timeout_sec=10.0):
-            self.get_logger().error("Takeoff action server not available")
+        # Wait for MAVROS services
+        if not self.takeoff_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error("MAVROS takeoff service not available")
             return False
         
-        goal = Takeoff.Goal()
-        goal.takeoff_height = altitude
-        goal.takeoff_speed = 1.0
-        
+        # Send takeoff command
         try:
-            # Send goal and wait for result with proper feedback handling
-            future = self.takeoff_client.send_goal_async(
-                goal, 
-                feedback_callback=self.takeoff_feedback_callback
-            )
+            request = CommandTOL.Request()
+            request.altitude = altitude
             
-            # Wait for goal to be accepted
-            timeout = 5.0
-            start_time = time.time()
-            while not future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            future = self.takeoff_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
             
-            if not future.done():
-                self.get_logger().error("Takeoff goal submission timeout")
-                return False
-            
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("Takeoff goal rejected")
-                return False
-            
-            self.get_logger().info("Takeoff goal accepted, waiting for completion...")
-            
-            # Wait for takeoff to complete
-            result_future = goal_handle.get_result_async()
-            timeout = 30.0  # Takeoff can take time
-            start_time = time.time()
-            
-            while not result_future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            if future.result() and future.result().success:
+                self.get_logger().info("Takeoff command sent successfully")
                 
-            if result_future.done():
-                result = result_future.result()
-                if result.result.success:
-                    self.get_logger().info("✅ Takeoff completed successfully")
-                    self.is_flying = True
-                    return True
-                else:
-                    self.get_logger().error(f"Takeoff failed: {result.result.message}")
-                    return False
+                # Wait for takeoff to complete by monitoring altitude
+                start_time = time.time()
+                timeout = 30.0
+                target_altitude = altitude * 0.95  # 95% of target altitude
+                
+                while (time.time() - start_time) < timeout:
+                    if self.current_position and self.current_position[2] >= target_altitude:
+                        self.get_logger().info("✅ Takeoff completed successfully")
+                        return True
+                    
+                    time.sleep(0.5)
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                
+                self.get_logger().error("Takeoff timeout - altitude not reached")
+                return False
             else:
-                self.get_logger().error("Takeoff timeout")
+                self.get_logger().error("Takeoff command failed")
                 return False
                 
         except Exception as e:
             self.get_logger().error(f"Error during takeoff: {e}")
             return False
     
-    def takeoff_feedback_callback(self, feedback_msg):
-        """Handle takeoff feedback"""
-        feedback = feedback_msg.feedback
-        self.get_logger().info(f"Takeoff progress: {feedback}")
-    
-    def goto_waypoint(self, waypoint, speed):
-        """Navigate to waypoint using Aerostack2 GoToWaypoint action"""
+    def goto_waypoint_mavros(self, waypoint, speed):
+        """Navigate to waypoint using direct MAVROS setpoint publishing"""
         self.get_logger().info(f"Going to waypoint: {waypoint} at speed {speed}")
         
-        if not self.goto_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("GoToWaypoint action server not available")
-            return False
+        # Create setpoint message
+        setpoint = PoseStamped()
+        setpoint.header.frame_id = "map"
+        setpoint.pose.position.x = waypoint[0]
+        setpoint.pose.position.y = waypoint[1]
+        setpoint.pose.position.z = waypoint[2]
+        setpoint.pose.orientation.w = 1.0
         
-        goal = GoToWaypoint.Goal()
-        goal.target_pose.header.frame_id = "earth"
-        goal.target_pose.pose.position.x = waypoint[0]
-        goal.target_pose.pose.position.y = waypoint[1]
-        goal.target_pose.pose.position.z = waypoint[2]
-        goal.target_pose.pose.orientation.w = 1.0
-        goal.max_speed = speed
+        start_time = time.time()
+        timeout = 60.0
+        last_publish_time = 0
+        publish_rate = 0.05  # 20 Hz = 0.05 second interval
         
-        # Set yaw mode
-        goal.yaw.mode = YawMode.KEEP_YAW
-        
-        try:
-            future = self.goto_client.send_goal_async(goal)
+        while (time.time() - start_time) < timeout:
+            current_time = time.time()
             
-            # Wait for goal acceptance
-            timeout = 5.0
-            start_time = time.time()
-            while not future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            # Publish at desired rate
+            if (current_time - last_publish_time) >= publish_rate:
+                setpoint.header.stamp = self.get_clock().now().to_msg()
+                self.local_pos_pub.publish(setpoint)
+                last_publish_time = current_time
             
-            if not future.done():
-                self.get_logger().error("GoToWaypoint goal submission timeout")
-                return False
-            
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("GoToWaypoint goal rejected")
-                return False
-            
-            # Wait for completion
-            result_future = goal_handle.get_result_async()
-            timeout = 60.0  # Navigation can take time
-            start_time = time.time()
-            
-            while not result_future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            # Check if waypoint is reached
+            if self.current_position:
+                distance = np.sqrt(
+                    (self.current_position[0] - waypoint[0])**2 +
+                    (self.current_position[1] - waypoint[1])**2 +
+                    (self.current_position[2] - waypoint[2])**2
+                )
                 
-            if result_future.done():
-                result = result_future.result()
-                if result.result.success:
+                if distance < self.waypoint_tolerance:
                     self.get_logger().info(f"✅ Reached waypoint: {waypoint}")
                     return True
-                else:
-                    self.get_logger().error(f"Failed to reach waypoint: {result.result.message}")
-                    return False
-            else:
-                self.get_logger().error("GoToWaypoint timeout")
-                return False
-                
-        except Exception as e:
-            self.get_logger().error(f"Error navigating to waypoint: {e}")
-            return False
+            
+            # Process callbacks and sleep
+            rclpy.spin_once(self, timeout_sec=0.001)
+            time.sleep(0.01)  # Small sleep to prevent CPU spinning
+        
+        self.get_logger().error("Waypoint navigation timeout")
+        return False
     
-    def land_aerostack2(self):
-        """Land using Aerostack2 action"""
+    def land_mavros(self):
+        """Land using direct MAVROS commands"""
         self.get_logger().info("Landing...")
         
-        if not self.land_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Land action server not available")
+        if not self.land_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error("MAVROS land service not available")
             return False
         
-        goal = Land.Goal()
-        goal.land_speed = 0.5
-        
         try:
-            future = self.land_client.send_goal_async(goal)
+            request = CommandTOL.Request()
+            request.altitude = 0.0  # Land at ground level
             
-            # Wait for goal acceptance
-            timeout = 5.0
-            start_time = time.time()
-            while not future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            future = self.land_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
             
-            if not future.done():
-                self.get_logger().error("Land goal submission timeout")
-                return False
-            
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("Land goal rejected")
-                return False
-            
-            # Wait for landing completion
-            result_future = goal_handle.get_result_async()
-            timeout = 30.0
-            start_time = time.time()
-            
-            while not result_future.done() and (time.time() - start_time) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
+            if future.result() and future.result().success:
+                self.get_logger().info("Land command sent successfully")
                 
-            if result_future.done():
-                result = result_future.result()
-                if result.result.success:
-                    self.get_logger().info("✅ Landing completed successfully")
-                    self.is_flying = False
-                    return True
-                else:
-                    self.get_logger().error(f"Landing failed: {result.result.message}")
-                    return False
-            else:
+                # Wait for landing to complete by monitoring altitude
+                start_time = time.time()
+                timeout = 30.0
+                ground_threshold = 0.2  # Consider landed below 20cm
+                
+                while (time.time() - start_time) < timeout:
+                    if self.current_position and self.current_position[2] <= ground_threshold:
+                        self.get_logger().info("✅ Landing completed successfully")
+                        return True
+                    
+                    time.sleep(0.5)
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                
                 self.get_logger().error("Landing timeout")
+                return False
+            else:
+                self.get_logger().error("Land command failed")
                 return False
                 
         except Exception as e:
             self.get_logger().error(f"Error during landing: {e}")
             return False
     
-    def wait_for_tf_ready(self, timeout_sec=10.0):
-        """Wait for TF transforms to be available using ROS 2 TF2 patterns"""
-        self.get_logger().info("🔍 Waiting for TF transforms to be ready...")
-        
-        source_frame = "earth"
-        target_frame = "drone0/base_link"
+    def wait_for_mavros_ready(self, timeout_sec=10.0):
+        """Wait for MAVROS connection and basic state availability"""
+        self.get_logger().info("🔍 Waiting for MAVROS to be ready...")
         
         start_time = time.time()
         while (time.time() - start_time) < timeout_sec:
-            try:
-                # Check if transform is available
-                if self.tf_buffer.can_transform(
-                    target_frame, 
-                    source_frame, 
-                    rclpy.time.Time(),  # Latest available time
-                    timeout=rclpy.duration.Duration(seconds=0.1)
-                ):
-                    # Transform is available, get it to verify it's recent
-                    try:
-                        transform = self.tf_buffer.lookup_transform(
-                            target_frame,
-                            source_frame,
-                            rclpy.time.Time(),  # Latest available
-                            timeout=rclpy.duration.Duration(seconds=0.1)
-                        )
-                        self.get_logger().info(f"✅ TF transform ready: {source_frame} -> {target_frame}")
-                        return True
-                    except tf2_ros.TransformException as e:
-                        self.get_logger().debug(f"Transform available but lookup failed: {e}")
-                
-            except tf2_ros.TransformException as e:
-                self.get_logger().debug(f"TF not ready: {e}")
+            # Check if we have MAVROS state
+            if self.mavros_state and self.mavros_state.connected:
+                self.get_logger().info("✅ MAVROS connection ready")
+                return True
             
-            # Spin once to process TF updates
             rclpy.spin_once(self, timeout_sec=0.1)
-            time.sleep(0.1)  # Small delay between checks
+            time.sleep(0.1)
         
-        self.get_logger().warn(f"TF readiness timeout after {timeout_sec}s")
+        self.get_logger().warn(f"MAVROS readiness timeout after {timeout_sec}s")
         return False
     
     def wait_for_gps(self, timeout_sec=30.0):
@@ -577,19 +406,16 @@ class BasicSurveyMission(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
             
             position_ready = self.current_position is not None
+            mavros_connected = self.mavros_state is not None and self.mavros_state.connected
             
             # Log status every 2 seconds to reduce spam
             elapsed = time.time() - start_time
             if int(elapsed) % 2 == 0:
-                self.get_logger().info(f"Position available: {position_ready}, Platform state: {self.platform_state}")
+                self.get_logger().info(f"Position available: {position_ready}, MAVROS connected: {mavros_connected}")
             
-            # Only require position data - platform state is not critical for mission execution
-            if position_ready:
-                self.get_logger().info("✅ System ready! Position data available.")
-                if self.platform_state is not None:
-                    self.get_logger().info(f"🔄 Platform state: {self.platform_state}")
-                else:
-                    self.get_logger().warn("⚠️  Platform state not available, but proceeding with mission (pose data sufficient)")
+            # Require position data and MAVROS connection
+            if position_ready and mavros_connected:
+                self.get_logger().info("✅ System ready! Position data available and MAVROS connected.")
                 return True
             
             time.sleep(1)
@@ -598,66 +424,57 @@ class BasicSurveyMission(Node):
         return False
     
     def execute_mission(self):
-        """Execute the survey mission using Aerostack2 actions"""
+        """Execute the survey mission using direct MAVROS commands"""
         try:
-            self.get_logger().info("🚁 Starting Aerostack2 Survey Mission")
+            self.get_logger().info("🚁 Starting Direct MAVROS Survey Mission")
             
-            if not self.wait_for_system_ready():
+            # Phase 1: Wait for MAVROS readiness
+            self.get_logger().info("Phase 1: Waiting for MAVROS readiness")
+            if not self.wait_for_mavros_ready(timeout_sec=15.0):
+                self.get_logger().error("MAVROS not ready - aborting mission")
                 return False
             
-            # Phase 0: Wait for TF to be ready (ROS 2-compatible version of forum suggestion)
-            self.get_logger().info("Phase 0: Waiting for TF readiness")
-            if not self.wait_for_tf_ready(timeout_sec=15.0):
-                self.get_logger().error("TF not ready - aborting mission")
-                return False
-            
-            # Phase 1: Set mode and arm
-            self.get_logger().info("Phase 1: Setting GUIDED mode and arming")
+            # Phase 2: Set mode and arm
+            self.get_logger().info("Phase 2: Setting GUIDED mode and arming")
             if not self.set_guided_mode():
                 return False
             
             # Check GPS status before arming (helpful for diagnosis)
             self.wait_for_gps(timeout_sec=10.0)  # Short timeout for SITL
             
-            if not self.arm_drone_aerostack2():
+            if not self.arm_drone():
                 return False
             
-            # Try to wait for platform to recognize armed state (with extended timeout for high RTT)
+            # Wait for armed confirmation
             if not self.wait_for_armed_state(timeout_sec=10.0):
-                self.get_logger().warn("⚠️  Platform armed state confirmation timeout")
-                self.get_logger().info("🚀 Proceeding with mission (DroneInterface arming succeeded)")
-                # Don't abort - proceed if DroneInterface arm() succeeded
-            
-            # Phase 1.5: Verify external control mode (GUIDED mode sufficient for ArduPilot)
-            self.get_logger().info("Phase 1.5: Verifying external control mode")
-            self.get_logger().info("✅ GUIDED mode already active - sufficient for motion control with ArduPilot")
-            time.sleep(0.5)  # Brief pause before takeoff
-            
-            # Phase 2: Takeoff
-            self.get_logger().info("Phase 2: Taking off")
-            takeoff_altitude = self.config['altitude']
-            if not self.takeoff_aerostack2(takeoff_altitude):
+                self.get_logger().error("Failed to confirm armed state")
                 return False
             
-            # Phase 3: Execute survey pattern
-            self.get_logger().info("Phase 3: Executing survey pattern")
-            speed = self.config['flight_speed']
+            # Phase 3: Takeoff
+            self.get_logger().info("Phase 3: Taking off")
+            takeoff_altitude = self.config.get('altitude', self.takeoff_altitude)
+            if not self.takeoff_mavros(takeoff_altitude):
+                return False
+            
+            # Phase 4: Execute survey pattern
+            self.get_logger().info("Phase 4: Executing survey pattern")
+            speed = self.config.get('flight_speed', self.flight_speed)
             
             for i, waypoint in enumerate(self.waypoints):
                 self.get_logger().info(f"Waypoint {i+1}/{len(self.waypoints)}: {waypoint}")
-                if not self.goto_waypoint(waypoint, speed):
+                if not self.goto_waypoint_mavros(waypoint, speed):
                     self.get_logger().error(f"Failed to reach waypoint {i+1}")
                     return False
                 
                 # Small delay between waypoints
                 time.sleep(1)
             
-            # Phase 4: Land
-            self.get_logger().info("Phase 4: Landing")
-            if not self.land_aerostack2():
+            # Phase 5: Land
+            self.get_logger().info("Phase 5: Landing")
+            if not self.land_mavros():
                 return False
             
-            self.get_logger().info("🎉 Survey mission completed successfully!")
+            self.get_logger().info("🎉 Direct MAVROS survey mission completed successfully!")
             return True
             
         except KeyboardInterrupt:
@@ -670,7 +487,7 @@ class BasicSurveyMission(Node):
 def main():
     parser = argparse.ArgumentParser(description='Basic Survey Mission')
     parser.add_argument('--config', type=str, 
-                       default='/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/config/basic_survey_config.yaml',
+                       default='/home/dhandavishal/aerostack2_ws/src/as2_ardu_msn/config/mission_config.yaml',
                        help='Path to configuration file')
     
     # Remove ROS args to avoid conflicts and ignore unknown args
