@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+
+from launch import LaunchDescription
+from launch_ros.actions import Node, PushRosNamespace
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, TimerAction
+from launch.conditions import IfCondition
+from launch.launch_description_sources import AnyLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Get the package directory
+    pkg_name = 'as2_ardu_msn'
+    pkg_dir = get_package_share_directory(pkg_name)
+    mavros_dir = get_package_share_directory('mavros')
+    
+    # Declare launch arguments
+    num_drones_arg = DeclareLaunchArgument(
+        'num_drones', 
+        default_value='2',
+        description='Number of drones in the swarm'
+    )
+    
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time', 
+        default_value='true',
+        description='Use simulation time'
+    )
+    
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config',
+        default_value=os.path.join(pkg_dir, 'config', 'multi_drone_config.yaml'),
+        description='Path to the multi-drone mission configuration file.'
+    )
+    
+    # Launch Configurations
+    num_drones = LaunchConfiguration('num_drones')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    mission_config = LaunchConfiguration('mission_config')
+    
+    # Create launch descriptions for each drone
+    # Drone 0 configuration
+    drone0_mavros = GroupAction([
+        PushRosNamespace('drone0'),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(mavros_dir, 'launch', 'apm.launch')
+            ),
+            launch_arguments={
+                'fcu_url': 'udp://:14555@127.0.0.1:14550',  # ArduPilot SITL instance 0
+                'tgt_system': '1',
+                'tgt_component': '1',
+                'config_yaml': os.path.join(pkg_dir, 'config', 'mavros_timing_fix.yaml'),
+                'gcs_url': '',  # No GCS connection
+            }.items()
+        )
+    ])
+    
+    # Drone 1 configuration
+    drone1_mavros = GroupAction([
+        PushRosNamespace('drone1'),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(mavros_dir, 'launch', 'apm.launch')
+            ),
+            launch_arguments={
+                'fcu_url': 'udp://:14565@127.0.0.1:14560',  # ArduPilot SITL instance 1
+                'tgt_system': '1',
+                'tgt_component': '1',
+                'config_yaml': os.path.join(pkg_dir, 'config', 'mavros_timing_fix.yaml'),
+                'gcs_url': '',
+            }.items()
+        )
+    ])
+    '''
+    # Drone 2 configuration
+    drone2_mavros = GroupAction([
+        PushRosNamespace('drone2'),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(mavros_dir, 'launch', 'apm.launch')
+            ),
+            launch_arguments={
+                'fcu_url': 'udp://:14575@127.0.0.1:14570',  # ArduPilot SITL instance 2
+                'tgt_system': '1',
+                'tgt_component': '1',
+                'config_yaml': os.path.join(pkg_dir, 'config', 'mavros_timing_fix.yaml'),
+                'gcs_url': '',
+            }.items()
+        )
+    ])
+    '''
+    # Static transform publishers for each drone (earth to odom)
+    static_tf_earth_to_odom_0 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='earth_to_odom_broadcaster_0',
+        arguments=['0', '0', '0', '0', '0', '0', 'earth', 'drone0/odom'],
+        output='screen'
+    )
+    
+    static_tf_earth_to_odom_1 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='earth_to_odom_broadcaster_1',
+        arguments=['0', '0', '0', '0', '0', '0', 'earth', 'drone1/odom'],
+        output='screen'
+    )
+    '''
+    static_tf_earth_to_odom_2 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='earth_to_odom_broadcaster_2',
+        arguments=['0', '0', '0', '0', '0', '0', 'earth', 'drone2/odom'],
+        output='screen'
+    )
+    '''
+    # Optional: State estimator for each drone (if needed)
+    state_estimator_drone0 = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('as2_state_estimator'), 
+                         'launch', 'state_estimator_launch.py')
+        ),
+        launch_arguments={
+            'namespace': 'drone0',
+            'plugin_name': 'raw_odometry',
+            'use_sim_time': use_sim_time,
+            'config_file': os.path.join(pkg_dir, 'config', 'state_estimator.yaml'),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration('use_state_estimator', default='false'))
+    )
+    
+    state_estimator_drone1 = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('as2_state_estimator'), 
+                         'launch', 'state_estimator_launch.py')
+        ),
+        launch_arguments={
+            'namespace': 'drone1',
+            'plugin_name': 'raw_odometry',
+            'use_sim_time': use_sim_time,
+            'config_file': os.path.join(pkg_dir, 'config', 'state_estimator.yaml'),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration('use_state_estimator', default='false'))
+    )
+    
+    state_estimator_drone2 = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('as2_state_estimator'), 
+                         'launch', 'state_estimator_launch.py')
+        ),
+        launch_arguments={
+            'namespace': 'drone2',
+            'plugin_name': 'raw_odometry',
+            'use_sim_time': use_sim_time,
+            'config_file': os.path.join(pkg_dir, 'config', 'state_estimator.yaml'),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration('use_state_estimator', default='false'))
+    )
+    
+    # Multi-drone survey mission node
+    multi_drone_mission_node = Node(
+        package=pkg_name,
+        executable='multi_drone_survey_mission.py',
+        name='multi_drone_survey_mission_node',
+        output='screen',
+        arguments=['--config', mission_config],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+        }]
+    )
+    
+    # Optional: Ground Control Station visualizer
+    gcs_visualizer = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='swarm_visualizer',
+        arguments=['-d', os.path.join(pkg_dir, 'config', 'swarm_visualization.rviz')],
+        condition=IfCondition(LaunchConfiguration('use_rviz', default='false'))
+    )
+    
+    # Optional: Swarm coordinator node for advanced coordination
+    swarm_coordinator = Node(
+        package=pkg_name,
+        executable='swarm_coordinator.py',
+        name='swarm_coordinator_node',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'num_drones': num_drones,
+        }],
+        condition=IfCondition(LaunchConfiguration('use_coordinator', default='false'))
+    )
+    
+    return LaunchDescription([
+        # Launch arguments
+        num_drones_arg,
+        use_sim_time_arg,
+        mission_config_arg,
+        DeclareLaunchArgument('use_state_estimator', default_value='false'),
+        DeclareLaunchArgument('use_rviz', default_value='false'),
+        DeclareLaunchArgument('use_coordinator', default_value='false'),
+        
+        # Start MAVROS for each drone
+        drone0_mavros,
+        drone1_mavros,
+        #drone2_mavros,
+        
+        # Add static TF publishers for each drone
+        static_tf_earth_to_odom_0,
+        static_tf_earth_to_odom_1,
+        #static_tf_earth_to_odom_2,
+        
+        # Optional state estimators (if enabled)
+        state_estimator_drone0,
+        state_estimator_drone1,
+        #state_estimator_drone2,
+        
+        # Optional visualization (if enabled)
+        gcs_visualizer,
+        
+        # Optional swarm coordinator (if enabled)
+        swarm_coordinator,
+        
+        # Start multi-drone mission node after MAVROS initialization
+        # Increased delay to ensure all MAVROS instances are ready
+        TimerAction(period=10.0, actions=[multi_drone_mission_node]),
+    ])

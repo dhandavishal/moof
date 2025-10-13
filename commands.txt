@@ -12,12 +12,11 @@ source install/setup.bash && ros2 launch as2_ardu_msn direct_mavros_mission.laun
 
 ------------------------------------------------------------------
 
-source ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
+source ~/ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./sim_vehicle.py -v ArduCopter --console --map --out=udp:127.0.0.1:14555
 
 ------------------------------------------------------------------
 
 source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py use_sim_time:=true
-
 
 -----------------------------------------------------------------
 
@@ -34,3 +33,22 @@ ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 pkill -f mavros
 pkill -f as2_ardu_msn
 pkill -f basic_survey_mission && pkill -f mavros && pkill -f as2
+
+-----------------------------------------------------------------
+
+# MULTI-DRONE COMMANDS
+
+# 1. Start ArduPilot SITL instances (in separate terminals)
+# Terminal 1 (System ID 1):
+cd ~/ardupilot/Tools/autotest
+./sim_vehicle.py -v ArduCopter -I0 --out=udp:127.0.0.1:14555
+
+# Terminal 2 (System ID 2):  
+cd ~/ardupilot/Tools/autotest
+./sim_vehicle.py -v ArduCopter -I1 --out=udp:127.0.0.1:14565
+
+# 3. Launch multi-drone mission (in terminal 3):
+source ~/aerostack2_ws/install/setup.bash
+ros2 launch as2_ardu_msn multi_drone_aerostack2.launch.py
+
+-----------------------------------------------------------------

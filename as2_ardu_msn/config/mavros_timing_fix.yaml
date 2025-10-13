@@ -1,26 +1,120 @@
 /**:
-  mavros:
-    ros__parameters:
-      # Completely disable timesync to eliminate RTT spikes
-      timesync_rate: 0.0  # Disable timesync completely
-      system_time_rate: 0.0  # Disable system time updates
+  ros__parameters:
+    # ============================================================
+    # MAVROS Configuration for Single & Multi-Drone Operations
+    # Optimized to eliminate RTT warnings, param spam, and mission pull spam
+    # ============================================================
+    
+    # Connection parameters
+    conn:
+      timeout: 45.0
+      heartbeat_rate: 1.0              # 1 Hz heartbeat
+      heartbeat_timeout: 30.0
+      timesync_rate: 10.0              # Reduced from default 100 Hz
+      system_time_rate: 1.0            # Low rate system time updates
+    
+    # Time synchronization - CRITICAL for RTT warnings
+    time:
+      time_ref_source: "fcu"
+      timesync_mode: "MAVLINK"
+      timesync_avg_alpha: 0.6
+      timesync_avg_beta: 0.1
+      max_rtt_sample: 10000            # ⭐ 10 sec tolerance (fixes RTT warnings)
+      max_deviation_sample: 10000      # ⭐ 10 sec deviation tolerance
+      convergence_window: 500          # More lenient convergence
       
-      # Increase all timeouts significantly
-      conn:
-        timeout: 60.0  # Very long connection timeout
-        heartbeat_timeout: 60.0  # Long heartbeat timeout
+    # Plugin configuration - Only essential plugins
+    plugin_allowlist:
+      - 'sys_status'
+      - 'sys_time'
+      - 'command'
+      - 'setpoint_position'
+      - 'setpoint_velocity'
+      - 'local_position'
+      - 'global_position'
+      - 'home_position'
+      - 'param'
+      - 'mission'
+    
+    # Disable all non-essential plugins
+    plugin_denylist:
+      - 'obstacle_distance'
+      - 'trajectory'
+      - 'vibration'
+      - 'wheel_odometry'
+      - 'mocap_pose_estimate'
+      - 'vision_pose'
+      - 'vision_speed'
+      - 'cam_imu_sync'
+      - 'cellular_status'
+      - 'companion_process_status'
+      - 'debug_value'
+      - 'esc_status'
+      - 'fake_gps'
+      - 'geofence'
+      - 'hil'
+      - 'manual_control'
+      - 'mount_control'
+      - 'odom'
+      - 'onboard_computer_status'
+      - 'rallypoint'
+      - 'safety_area'
+      - 'vfr_hud'
+      - 'wind_estimation'
+    
+    # System status plugin
+    sys_status:
+      min_voltage: 10.0
+      disable_diag: false
+      heartbeat_rate: 1.0
+    
+    # Parameter plugin - OPTIMIZED to reduce unsolicited param spam
+    param:
+      max_param_count: 1024
+      request_rate: 3.0                # ⭐ Further reduced to 3 Hz
+      force_pull: false                # ⭐ Don't force parameter pull
+      pull_after_gcs: false            # ⭐ Don't pull after GCS
+      component_id: 0
+      param_timeout: 20.0              # ⭐ Longer timeout for SITL
+      retries_count: 5                 # More retries
+      use_comp_id_system_control: false
+      
+    # Mission plugin - CRITICAL: Stop mission pull spam
+    mission:
+      pull_after_gcs: false            # ⭐⭐⭐ CRITICAL: Prevents "WP: seems GCS requesting mission"
+      use_mission_item_int: true
+      
+    # Local position plugin
+    local_position:
+      frame_id: "map"
+      tf:
+        send: true
+        frame_id: "map"
+        child_frame_id: "base_link"
+        rate_limit: 10.0
         
-      # Reduce rates for all time-sensitive operations
-      param:
-        force_pull: false  # Don't force parameter pulls
-        pull_after_gcs: false  # Don't pull after GCS
+    # Global position plugin  
+    global_position:
+      frame_id: "map"
+      child_frame_id: "base_link"
+      rot_covariance: 99999.0
+      gps_uere: 1.0
+      use_relative_alt: true
+      tf:
+        send: false
+        frame_id: "map"
+        child_frame_id: "base_link"
+        global_frame_id: "earth"
         
-      # Plugin blacklist - disable all timing-sensitive plugins
-      plugin_blacklist:
-        - "obstacle_distance"
-        - "trajectory" 
-        - "vibration"
-        - "wheel_odometry"
-        - "sys_time"  # Disable system time plugin
-        - "mocap_pose_estimate"  # Disable mocap timing
-        - "vision_pose"  # Disable vision pose timing
+    # Setpoint position plugin
+    setpoint_position:
+      tf:
+        listen: false
+        frame_id: "map"
+        child_frame_id: "target_position"
+        rate_limit: 50.0
+      mav_frame: 1  # LOCAL_NED
+      
+    # Command plugin
+    command:
+      use_comp_id_system_control: false

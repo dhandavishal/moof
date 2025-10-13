@@ -30,6 +30,7 @@ setup(
         'console_scripts': [
             'basic_survey_mission.py = as2_ardu_msn.basic_survey_mission:main',
             'direct_mavros_mission.py = as2_ardu_msn.direct_mavros_mission:main',
+            'multi_drone_survey_mission.py = as2_ardu_msn.multi_drone_survey_mission:main',
         ],
     },
 )

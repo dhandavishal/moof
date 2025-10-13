@@ -1,0 +1,62 @@
+# Multi-Drone Survey Mission Configuration
+# This file configures both survey parameters and swarm behavior
+
+# Swarm Configuration
+swarm_config:
+  num_drones: 2                    # Number of drones in the swarm
+  formation_type: "line"           # "line" or "parallel"
+  drone_spacing: 5.0               # Spacing between drones in meters (for parallel mode)
+  synchronized: false              # true = all fly together, false = sequential
+  
+  # Individual drone configurations (optional overrides)
+  drones:
+    - id: 0
+      start_delay: 0.0             # Delay before starting (seconds)
+      altitude_offset: 0.0         # Altitude offset from base altitude
+    - id: 1
+      start_delay: 0.0
+      altitude_offset: 0.0
+
+# Survey Parameters (shared by all drones)
+survey_parameters:
+  # Survey area definition
+  area_width: 30.0                # Width of survey area in meters
+  area_length: 40.0               # Length of survey area in meters
+  altitude: 10.0                  # Survey altitude in meters
+  line_spacing: 3.0               # Spacing between survey lines
+  
+  # Origin offset from home position
+  origin_offset:
+    x: 10.0                       # X offset from home
+    y: 10.0                       # Y offset from home
+  
+  # Flight parameters
+  flight_speed: 2.0               # Survey speed in m/s
+  transition_speed: 3.0          # Speed for transitions between lines
+  waypoint_tolerance: 1.0         # Tolerance for reaching waypoints
+  
+  # Mission behavior
+  auto_start: false               # Start mission automatically
+  rtl_on_completion: true         # Return to launch after survey
+  emergency_land_altitude: 2.0    # Emergency land if below this altitude
+
+# Communication settings
+communication:
+  heartbeat_timeout: 10.0         # Timeout for drone heartbeat
+  command_retry: 3                # Number of command retries
+  inter_drone_comm: false         # Enable inter-drone communication
+
+# Safety settings
+safety:
+  min_battery: 20.0               # Minimum battery percentage
+  max_altitude: 50.0              # Maximum allowed altitude
+  geofence_radius: 100.0          # Geofence radius from home
+  collision_avoidance: true       # Enable collision avoidance between drones
+  min_drone_separation: 3.0       # Minimum separation between drones
+
+# Logging and telemetry
+telemetry:
+  log_level: "INFO"               # DEBUG, INFO, WARN, ERROR
+  save_telemetry: true            # Save telemetry data
+  telemetry_rate: 10.0            # Hz
+  mission_log_path: "/tmp/swarm_mission_logs/"
