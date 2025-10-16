@@ -1,0 +1,74 @@
+# ArduPilot SITL Default Parameters for Multi-Drone Setup
+# These parameters are applied to each SITL instance
+
+# System ID will be set per-drone via launch_multi_sitl.sh
+# SYSID_THISMAV is configured individually
+
+# MAVLink Configuration
+SERIAL0_PROTOCOL=2
+SERIAL0_BAUD=115200
+SERIAL1_PROTOCOL=2
+SERIAL1_BAUD=921600
+
+# Flight Modes
+FLTMODE1=0    # Stabilize
+FLTMODE2=2    # AltHold
+FLTMODE3=3    # Auto
+FLTMODE4=4    # Guided
+FLTMODE5=5    # Loiter
+FLTMODE6=6    # RTL
+
+# Safety
+FS_THR_ENABLE=1     # Throttle failsafe enabled
+FS_THR_VALUE=975    # Throttle failsafe value
+FS_GCS_ENABLE=1     # GCS failsafe enabled
+FENCE_ENABLE=0      # Fence disabled by default
+
+# GPS
+GPS_TYPE=1
+SIM_GPS_DISABLE=0
+
+# Battery
+BATT_MONITOR=4      # Analog voltage and current
+BATT_CAPACITY=5000  # mAh
+BATT_LOW_VOLT=10.5  # Low battery voltage
+BATT_CRT_VOLT=10.0  # Critical battery voltage
+
+# EKF
+EK2_ENABLE=0
+EK3_ENABLE=1
+AHRS_EKF_TYPE=3
+
+# Arming
+ARMING_CHECK=1      # Enable all arming checks
+
+# RC Input
+RC1_MIN=1100
+RC1_MAX=1900
+RC2_MIN=1100
+RC2_MAX=1900
+RC3_MIN=1100
+RC3_MAX=1900
+RC4_MIN=1100
+RC4_MAX=1900
+
+# Position Control
+PSC_POSXY_P=1.0
+PSC_POSZ_P=1.0
+PSC_VELXY_P=2.0
+PSC_VELXY_I=1.0
+PSC_VELZ_P=5.0
+
+# Rate Control
+ATC_RAT_PIT_P=0.135
+ATC_RAT_PIT_I=0.135
+ATC_RAT_PIT_D=0.0036
+ATC_RAT_RLL_P=0.135
+ATC_RAT_RLL_I=0.135
+ATC_RAT_RLL_D=0.0036
+ATC_RAT_YAW_P=0.180
+ATC_RAT_YAW_I=0.018
+
+# Logging
+LOG_BACKEND_TYPE=1
+LOG_FILE_BUFSIZE=200

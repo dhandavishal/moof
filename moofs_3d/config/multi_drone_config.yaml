@@ -1,0 +1,74 @@
+# Multi-Drone System Configuration
+
+# SITL Configuration
+sitl:
+  base_sysid: 1
+  base_port_mavproxy: 14550
+  base_port_sitl_out: 14555
+  base_port_sitl_in: 14560
+  spacing_meters: 10
+  vehicle_type: "copter"
+
+# Drone Capabilities (can be overridden per drone)
+default_capabilities:
+  max_speed: 15.0  # m/s
+  max_altitude: 120.0  # meters
+  battery_capacity: 5000  # mAh
+  flight_time: 20  # minutes
+  sensors:
+    - gps
+    - imu
+    - magnetometer
+    - barometer
+
+# Individual drone configurations
+drones:
+  drone_0:
+    name: "Alpha"
+    sysid: 1
+    start_position: [0, 0, 0]  # [x, y, z] in meters
+    color: "#FF0000"  # Red
+    
+  drone_1:
+    name: "Bravo"
+    sysid: 2
+    start_position: [10, 0, 0]
+    color: "#00FF00"  # Green
+    
+  drone_2:
+    name: "Charlie"
+    sysid: 3
+    start_position: [20, 0, 0]
+    color: "#0000FF"  # Blue
+    
+  drone_3:
+    name: "Delta"
+    sysid: 4
+    start_position: [30, 0, 0]
+    color: "#FFFF00"  # Yellow
+    
+  drone_4:
+    name: "Echo"
+    sysid: 5
+    start_position: [40, 0, 0]
+    color: "#FF00FF"  # Magenta
+
+# MAVROS Configuration
+mavros:
+  fcu_protocol: "v2.0"
+  system_id: 255
+  component_id: 240
+  connection_timeout: 30  # seconds
+  
+# Network Configuration
+network:
+  gcs_ip: "127.0.0.1"
+  ros_domain_id: 0
+
+# Safety Parameters
+safety:
+  max_mission_radius: 500  # meters from home
+  min_battery_return: 20  # percent
+  emergency_land_battery: 10  # percent
+  geofence_enabled: true
+  max_altitude_agl: 120  # meters above ground level
