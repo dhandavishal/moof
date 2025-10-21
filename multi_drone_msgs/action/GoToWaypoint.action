@@ -1,0 +1,21 @@
+# GoToWaypoint Action
+# Navigate drone to a specific waypoint
+
+# Goal
+geometry_msgs/Point target_position    # x, y, z in meters (NED frame)
+float32 target_heading                 # Degrees, -1 = don't change
+float32 max_speed                      # m/s, 0 = default
+float32 acceptance_radius              # meters, how close is "close enough"
+---
+# Result
+bool success
+string message
+geometry_msgs/Point final_position
+float32 distance_error                 # meters from target
+---
+# Feedback
+geometry_msgs/Point current_position
+float32 distance_remaining             # meters
+float32 progress                       # 0-100%
+float32 estimated_time_remaining       # seconds
+string status

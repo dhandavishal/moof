@@ -1,0 +1,16 @@
+# Takeoff Action
+# Command drone to takeoff to a specified altitude
+
+# Goal
+float32 target_altitude    # Meters above ground level
+float32 climb_rate         # m/s (optional, 0 = default)
+---
+# Result
+bool success
+string message
+float32 final_altitude
+---
+# Feedback
+float32 current_altitude
+float32 progress           # 0-100%
+string status

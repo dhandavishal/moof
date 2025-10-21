@@ -1,0 +1,16 @@
+# ExecutePrimitive Action  
+# Generic action for executing any flight primitive
+
+# Goal
+string primitive_type      # arm, disarm, takeoff, land, goto, rtl, hold, etc.
+string[] parameters        # Primitive-specific parameters as strings
+---
+# Result
+bool success
+string message
+string result_data         # Primitive-specific result data
+---
+# Feedback
+float32 progress           # 0-100%
+string status
+string current_phase

@@ -1,0 +1,9 @@
+# Arm/Disarm Service
+# Request to arm or disarm the drone
+
+bool arm                     # true = arm, false = disarm
+bool force                   # Force arming (bypass pre-arm checks)
+---
+bool success
+string message
+bool current_armed_state

@@ -1,98 +1,139 @@
 #!/usr/bin/env python3
 """
-Multi-MAVROS Launch File
-Launches multiple MAVROS instances for multi-drone control
-Each drone gets unique namespace and FCU connection ports
+Complete Multi-Drone System Launch
+Launches MAVROS for multiple drones and monitoring node
+Based on working basic_aerostack2 pattern
+Note: SITL instances must be started separately
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import LaunchConfiguration, TextSubstitution
-from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, GroupAction, TimerAction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node, PushRosNamespace
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def generate_mavros_nodes(context, *args, **kwargs):
-    """Generate MAVROS nodes based on num_drones parameter"""
+def generate_system_nodes(context, *args, **kwargs):
+    """Generate all system nodes"""
     
     num_drones = int(LaunchConfiguration('num_drones').perform(context))
+    use_state_estimator = LaunchConfiguration('use_state_estimator').perform(context)
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    
     base_fcu_port = 14550
     base_gcs_port = 14555
     
-    nodes = []
+    mavros_dir = get_package_share_directory('mavros')
     
+    actions = []
+    
+    # Generate MAVROS nodes for each drone
     for i in range(num_drones):
         drone_id = i
         namespace = f'drone_{drone_id}'
         
         # Calculate unique ports for this drone
-        fcu_url = f'udp://:{base_fcu_port + (drone_id * 10)}@localhost:{base_gcs_port + (drone_id * 10)}'
+        fcu_port = base_fcu_port + (drone_id * 10)
+        gcs_port = base_gcs_port + (drone_id * 10)
+        fcu_url = f'udp://:{gcs_port}@127.0.0.1:{fcu_port}'
         
-        # MAVROS parameters
-        mavros_params = {
-            'fcu_url': fcu_url,
-            'gcs_url': '',
-            'target_system_id': drone_id + 1,  # Must match SYSID_THISMAV in SITL
-            'target_component_id': 1,
-            'fcu_protocol': 'v2.0',
-            'system_id': 255,
-            'component_id': 240,
-            'startup_px4_usb_quirk': False,
-        }
+        # MAVROS Launch wrapped in namespace group
+        mavros_launch = GroupAction([
+            PushRosNamespace(namespace),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(
+                    os.path.join(mavros_dir, 'launch', 'apm.launch')
+                ),
+                launch_arguments={
+                    'fcu_url': fcu_url,
+                    'tgt_system': str(drone_id + 1),
+                    'tgt_component': '1',
+                }.items()
+            )
+        ])
         
-        # Create MAVROS node
-        mavros_node = Node(
-            package='mavros',
-            executable='mavros_node',
-            name='mavros',
-            namespace=namespace,
-            output='screen',
-            parameters=[mavros_params],
-            remappings=[
-                # Remap topics to be within namespace
-                ('mavros/state', f'/{namespace}/mavros/state'),
-                ('mavros/local_position/pose', f'/{namespace}/mavros/local_position/pose'),
-                ('mavros/global_position/global', f'/{namespace}/mavros/global_position/global'),
-                ('mavros/battery', f'/{namespace}/mavros/battery'),
-            ],
+        # Static TF publisher for earth -> drone_X/odom
+        static_tf = Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name=f'earth_to_{namespace}_odom_broadcaster',
+            arguments=['0', '0', '0', '0', '0', '0', 'earth', f'{namespace}/odom'],
+            output='screen'
         )
         
-        nodes.append(mavros_node)
+        # Optional: State estimator for this drone
+        if use_state_estimator.lower() == 'true':
+            state_estimator = IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(
+                    os.path.join(get_package_share_directory('as2_state_estimator'), 
+                                'launch', 'state_estimator_launch.py')
+                ),
+                launch_arguments={
+                    'namespace': namespace,
+                    'plugin_name': 'raw_odometry',
+                    'use_sim_time': use_sim_time,
+                }.items()
+            )
+            actions.append(state_estimator)
         
-        print(f"Configured MAVROS for {namespace}:")
+        actions.append(mavros_launch)
+        actions.append(static_tf)
+        
+        print(f"Configured {namespace}:")
         print(f"  FCU URL: {fcu_url}")
         print(f"  Target System ID: {drone_id + 1}")
         print()
     
-    return nodes
+    # Add monitoring node with delay to allow MAVROS initialization
+    monitor_node = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='moofs_3d',
+                executable='multi_drone_monitor',
+                name='multi_drone_monitor',
+                output='screen',
+                parameters=[{
+                    'num_drones': num_drones,
+                    'use_sim_time': use_sim_time
+                }]
+            )
+        ]
+    )
+    actions.append(monitor_node)
+    
+    return actions
 
 
 def generate_launch_description():
-    """Generate launch description with configurable number of drones"""
+    """Generate complete launch description"""
     
-    # Declare launch arguments
     num_drones_arg = DeclareLaunchArgument(
         'num_drones',
         default_value='3',
-        description='Number of drones to launch MAVROS for'
+        description='Number of drones in the system'
     )
     
-    enable_logging_arg = DeclareLaunchArgument(
-        'enable_logging',
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
         default_value='true',
-        description='Enable ROS logging'
+        description='Use simulation time'
     )
     
-    # Create launch description
+    use_state_estimator_arg = DeclareLaunchArgument(
+        'use_state_estimator',
+        default_value='false',
+        description='Use state estimator for each drone'
+    )
+    
     ld = LaunchDescription()
-    
-    # Add arguments
     ld.add_action(num_drones_arg)
-    ld.add_action(enable_logging_arg)
-    
-    # Add MAVROS nodes (generated dynamically)
-    ld.add_action(OpaqueFunction(function=generate_mavros_nodes))
+    ld.add_action(use_sim_time_arg)
+    ld.add_action(use_state_estimator_arg)
+    ld.add_action(OpaqueFunction(function=generate_system_nodes))
     
     return ld

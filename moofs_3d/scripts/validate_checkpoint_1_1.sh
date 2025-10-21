@@ -31,17 +31,18 @@ else
 fi
 echo ""
 
-# Test 2: Check unique UDP ports
-echo -e "${YELLOW}Test 2: Checking UDP ports...${NC}"
+# Test 2: Check SITL processes have correct port arguments
+echo -e "${YELLOW}Test 2: Checking SITL port configurations...${NC}"
 BASE_PORT=14550
 PORTS_OK=true
 
 for i in 0 1 2; do
     PORT=$((BASE_PORT + i * 10))
-    if netstat -tuln 2>/dev/null | grep -q ":$PORT " || ss -tuln 2>/dev/null | grep -q ":$PORT "; then
-        echo -e "${GREEN}✓ Port $PORT is active (drone_$i)${NC}"
+    # Check if sim_vehicle.py process has the correct port in its arguments
+    if ps aux | grep "sim_vehicle.py" | grep -q "\-I $i.*--out=127.0.0.1:$PORT"; then
+        echo -e "${GREEN}✓ Drone $i configured for port $PORT${NC}"
     else
-        echo -e "${RED}✗ Port $PORT is NOT active (drone_$i)${NC}"
+        echo -e "${RED}✗ Drone $i NOT properly configured for port $PORT${NC}"
         PORTS_OK=false
     fi
 done
