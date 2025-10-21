@@ -125,6 +125,7 @@ EOF
     SIM_CMD+="--out=127.0.0.1:$SITL_OUT_PORT "
     SIM_CMD+="--model + "
     SIM_CMD+="--speedup 1 "
+    SIM_CMD+="--console "
     SIM_CMD+="--add-param-file=$PARAM_FILE "
     
     # Launch in a detached screen session, keeping it alive with 'exec bash'

@@ -6,6 +6,7 @@ import math
 from typing import Optional
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mavros_msgs.msg import State, PositionTarget
 from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Odometry
@@ -31,12 +32,19 @@ class GotoPrimitive(BasePrimitive):
         """
         super().__init__(node, drone_namespace)
         
-        # Create publisher for setpoint position
+        # Create publisher for setpoint
         setpoint_topic = f"{drone_namespace}/mavros/setpoint_position/local"
         self.setpoint_pub = node.create_publisher(
             PoseStamped,
             setpoint_topic,
             10
+        )
+        
+        # QoS profile for MAVROS topics (best effort to match MAVROS)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
         )
         
         # Subscribe to state and local position
@@ -45,7 +53,7 @@ class GotoPrimitive(BasePrimitive):
             State,
             state_topic,
             self._state_callback,
-            10
+            qos_profile
         )
         
         local_pos_topic = f"{drone_namespace}/mavros/local_position/pose"
@@ -53,7 +61,7 @@ class GotoPrimitive(BasePrimitive):
             PoseStamped,
             local_pos_topic,
             self._local_pos_callback,
-            10
+            qos_profile
         )
         
         # State tracking

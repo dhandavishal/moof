@@ -5,6 +5,7 @@ This node provides ROS2 action servers for flight primitives and abstracts
 MAVROS communication for drone control.
 """
 
+import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
@@ -382,35 +383,34 @@ class FALNode(Node):
         if not success:
             response.success = False
             response.message = self.arm_primitive.get_error_message()
+            self.get_logger().error(f"Arm primitive execute failed: {response.message}")
             return response
         
-        # Wait for completion (with timeout)
-        timeout = 5.0
-        start_time = self.get_clock().now()
-        rate = self.create_rate(10)
+        # Wait for completion (with timeout) using executor
+        timeout = 10.0
+        start_time = time.time()
         
-        while rclpy.ok():
-            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
-            if elapsed > timeout:
-                response.success = False
-                response.message = "Arm/disarm timeout"
-                return response
-            
+        while time.time() - start_time < timeout:
+            # Update primitive state
             state = self.arm_primitive.update()
             
             if state == PrimitiveState.SUCCESS:
                 response.success = True
                 response.message = f"{'Armed' if request.arm else 'Disarmed'} successfully"
+                self.get_logger().info(response.message)
                 return response
             elif state == PrimitiveState.FAILED:
                 response.success = False
                 response.message = self.arm_primitive.get_error_message()
+                self.get_logger().error(f"Arm primitive failed: {response.message}")
                 return response
             
-            rate.sleep()
+            # Small sleep to prevent busy waiting
+            time.sleep(0.05)
         
         response.success = False
-        response.message = "Arm/disarm interrupted"
+        response.message = "Arm/disarm timeout"
+        self.get_logger().error(response.message)
         return response
 
 

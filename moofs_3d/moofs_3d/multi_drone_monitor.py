@@ -6,6 +6,7 @@ Subscribes to state topics from all drones and displays status
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mavros_msgs.msg import State
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import BatteryState
@@ -24,6 +25,13 @@ class MultiDroneMonitor(Node):
         self.drone_positions = {}
         self.drone_batteries = {}
         
+        # QoS profile for MAVROS topics (best effort to match MAVROS)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
         # Create subscribers for each drone
         for i in range(self.num_drones):
             drone_ns = f'drone_{i}'
@@ -33,7 +41,7 @@ class MultiDroneMonitor(Node):
                 State,
                 f'/{drone_ns}/mavros/state',
                 lambda msg, id=i: self.state_callback(msg, id),
-                10
+                qos_profile
             )
             
             # Position subscriber
@@ -41,7 +49,7 @@ class MultiDroneMonitor(Node):
                 PoseStamped,
                 f'/{drone_ns}/mavros/local_position/pose',
                 lambda msg, id=i: self.position_callback(msg, id),
-                10
+                qos_profile
             )
             
             # Battery subscriber
@@ -49,7 +57,7 @@ class MultiDroneMonitor(Node):
                 BatteryState,
                 f'/{drone_ns}/mavros/battery',
                 lambda msg, id=i: self.battery_callback(msg, id),
-                10
+                qos_profile
             )
             
             # Initialize state

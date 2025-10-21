@@ -6,6 +6,7 @@ import math
 from typing import Optional
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mavros_msgs.srv import CommandTOL, SetMode
 from mavros_msgs.msg import State, ExtendedState
 from geometry_msgs.msg import PoseStamped, Point
@@ -38,13 +39,20 @@ class LandPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
+        # QoS profile for MAVROS topics (best effort to match MAVROS)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
         # Subscribe to state, extended state, and local position
         state_topic = f"{drone_namespace}/mavros/state"
         self.state_sub = node.create_subscription(
             State,
             state_topic,
             self._state_callback,
-            10
+            qos_profile
         )
         
         extended_state_topic = f"{drone_namespace}/mavros/extended_state"
@@ -52,7 +60,7 @@ class LandPrimitive(BasePrimitive):
             ExtendedState,
             extended_state_topic,
             self._extended_state_callback,
-            10
+            qos_profile
         )
         
         local_pos_topic = f"{drone_namespace}/mavros/local_position/pose"
@@ -60,7 +68,7 @@ class LandPrimitive(BasePrimitive):
             PoseStamped,
             local_pos_topic,
             self._local_pos_callback,
-            10
+            qos_profile
         )
         
         # State tracking
