@@ -39,9 +39,9 @@ class LandPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
-        # QoS profile for MAVROS topics (best effort to match MAVROS)
+        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )

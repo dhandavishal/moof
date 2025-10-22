@@ -38,9 +38,9 @@ class ArmPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
-        # QoS profile for MAVROS topics (best effort to match MAVROS)
+        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -64,7 +64,16 @@ class ArmPrimitive(BasePrimitive):
         
     def _state_callback(self, msg: State):
         """Callback for MAVROS state updates."""
+        old_armed = self.current_state.armed if self.current_state else None
         self.current_state = msg
+        
+        # Log when armed state changes
+        if old_armed is not None and old_armed != msg.armed:
+            self.logger.info(f"Armed state changed: {old_armed} -> {msg.armed}")
+        
+        # Also log during EXECUTING state to debug
+        if self.state == PrimitiveState.EXECUTING:
+            self.logger.debug(f"State callback: armed={msg.armed}, mode={msg.mode}, connected={msg.connected}")
         
     def execute(self, arm: bool = True, force: bool = False, timeout: float = 5.0) -> bool:
         """
@@ -91,6 +100,11 @@ class ArmPrimitive(BasePrimitive):
             self.set_error(f"SetMode service not available: {self.setmode_client.srv_name}")
             return False
         
+        # Wait for initial state to be received
+        wait_start = time.time()
+        while self.current_state is None and (time.time() - wait_start) < 2.0:
+            time.sleep(0.1)
+        
         # Check current state
         if self.current_state is None:
             self.set_error("No state information received from MAVROS")
@@ -112,8 +126,8 @@ class ArmPrimitive(BasePrimitive):
                         self.set_error("Failed to set GUIDED mode")
                         return False
                     self.logger.info("GUIDED mode set successfully")
-                    # Wait a bit for mode to take effect
-                    time.sleep(0.5)
+                    # Wait longer for mode to take effect
+                    time.sleep(1.0)
                 else:
                     self.set_error("SetMode service call timed out")
                     return False
@@ -145,6 +159,7 @@ class ArmPrimitive(BasePrimitive):
                     self.state = PrimitiveState.EXECUTING
                     self.command_sent_time = time.time()
                     self.logger.info(f"{'Arm' if arm else 'Disarm'} command sent successfully")
+                    # Don't sleep here - let the update loop check immediately
                     return True
                 else:
                     self.set_error(f"Arm command rejected: {response.result}")
@@ -171,7 +186,7 @@ class ArmPrimitive(BasePrimitive):
         if self.command_sent_time is not None:
             elapsed = time.time() - self.command_sent_time
             if elapsed > self.timeout:
-                self.set_error(f"Arm/disarm timeout after {elapsed:.1f}s")
+                self.set_error(f"Arm/disarm timeout after {self.timeout:.1f}s")
                 return self.state
             
             # Update progress based on time
@@ -179,9 +194,15 @@ class ArmPrimitive(BasePrimitive):
         
         # Check if armed state matches target
         if self.current_state is not None:
-            if self.current_state.armed == self.target_armed_state:
+            current_armed = self.current_state.armed
+            if current_armed == self.target_armed_state:
+                self.logger.info(f"Arm state confirmed: armed={current_armed}")
                 self.set_success()
                 return self.state
+            else:
+                # Log current state for debugging
+                if int(time.time() * 2) % 2 == 0:  # Log every 0.5s
+                    self.logger.debug(f"Waiting for arm state change: current={current_armed}, target={self.target_armed_state}")
         
         return self.state
     

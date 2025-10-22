@@ -41,6 +41,7 @@ AHRS_EKF_TYPE=3
 
 # Arming
 ARMING_CHECK=1      # Enable all arming checks
+DISARM_DELAY=15     # Seconds before auto-disarm (0=never auto-disarm on ground)
 
 # RC Input
 RC1_MIN=1100

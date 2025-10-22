@@ -5,6 +5,7 @@ This node provides ROS2 action servers for flight primitives and abstracts
 MAVROS communication for drone control.
 """
 
+import os
 import time
 import rclpy
 from rclpy.node import Node
@@ -377,39 +378,54 @@ class FALNode(Node):
         """Handle arm/disarm service requests."""
         self.get_logger().info(f'Arm/disarm service called: arm={request.arm}')
         
-        # Execute arm primitive
-        success = self.arm_primitive.execute(arm=request.arm, force=request.force)
+        # Execute arm primitive with longer timeout
+        success = self.arm_primitive.execute(arm=request.arm, force=request.force, timeout=10.0)
         
         if not success:
             response.success = False
             response.message = self.arm_primitive.get_error_message()
+            response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
             self.get_logger().error(f"Arm primitive execute failed: {response.message}")
             return response
         
-        # Wait for completion (with timeout) using executor
-        timeout = 10.0
+        # Wait for completion (with timeout)
+        timeout = 15.0  # Longer than primitive timeout
         start_time = time.time()
+        loop_count = 0
+        
+        self.get_logger().info(f"Waiting for arm/disarm completion (timeout={timeout}s)...")
         
         while time.time() - start_time < timeout:
+            loop_count += 1
+            
             # Update primitive state
             state = self.arm_primitive.update()
+            
+            # Log every half second for better visibility
+            if loop_count % 5 == 0:
+                elapsed = time.time() - start_time
+                current_armed = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else None
+                self.get_logger().info(f"Waiting... elapsed={elapsed:.1f}s, state={state}, current_armed={current_armed}, target={request.arm}")
             
             if state == PrimitiveState.SUCCESS:
                 response.success = True
                 response.message = f"{'Armed' if request.arm else 'Disarmed'} successfully"
+                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
                 self.get_logger().info(response.message)
                 return response
             elif state == PrimitiveState.FAILED:
                 response.success = False
                 response.message = self.arm_primitive.get_error_message()
+                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
                 self.get_logger().error(f"Arm primitive failed: {response.message}")
                 return response
             
             # Small sleep to prevent busy waiting
-            time.sleep(0.05)
+            time.sleep(0.1)
         
         response.success = False
-        response.message = "Arm/disarm timeout"
+        response.message = f"Arm/disarm service callback timeout after {timeout}s"
+        response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
         self.get_logger().error(response.message)
         return response
 
@@ -427,8 +443,11 @@ def main(args=None):
     # Create and spin the FAL node
     fal_node = FALNode(drone_namespace=drone_namespace)
     
-    # Use multi-threaded executor for concurrent action execution
-    executor = MultiThreadedExecutor()
+    # Use multi-threaded executor with enough worker threads so callbacks like
+    # mavros/state can keep updating while synchronous service handlers wait.
+    thread_count = max(2, os.cpu_count() or 2)
+    executor = MultiThreadedExecutor(num_threads=thread_count)
+    fal_node.get_logger().info(f"MultiThreadedExecutor using {thread_count} threads")
     executor.add_node(fal_node)
     
     try:

@@ -1,14 +1,13 @@
------------------------------------------------------------------
-
-rm -rf build/as2_ardu_msn install/as2_ardu_msn && colcon build --packages-select as2_ardu_msn
 
 -----------------------------------------------------------------
 
-source ~/aerostack2_ws/install/setup.bash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py
+cd ~/multi_drone_ws/src/moofs_3d/scripts
+./launch_multi_sitl.sh 1
 
 -----------------------------------------------------------------
-
-source install/setup.bash && ros2 launch as2_ardu_msn direct_mavros_mission.launch.py
+cd ~/multi_drone_ws
+source install/setup.bash
+ros2 launch moofs_3d single_drone_test.launch.py drone_id:=0
 
 ------------------------------------------------------------------
 
@@ -16,7 +15,9 @@ source ~/ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./si
 
 ------------------------------------------------------------------
 
-source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch as2_ardu_msn basic_aerostack2.launch.py use_sim_time:=true
+cd ~/multi_drone_ws
+source install/setup.bash
+ros2 run flight_abstraction test_single_drone --ros-args -p drone_id:=0
 
 -----------------------------------------------------------------
 
