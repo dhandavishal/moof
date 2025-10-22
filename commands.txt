@@ -1,3 +1,6 @@
+cd ~/multi_drone_ws
+colcon build --packages-select flight_abstraction --symlink-install
+source install/setup.bash
 
 -----------------------------------------------------------------
 
@@ -21,8 +24,7 @@ ros2 run flight_abstraction test_single_drone --ros-args -p drone_id:=0
 
 -----------------------------------------------------------------
 
-aerostack2_ws/src/as2_ardu_msn$ python3 basic_survey_mission.py --config config/mission_config.yaml
-
+source /opt/ros/humble/setup.bash && source ~/multi_drone_ws/install/setup.bash && ros2 launch moofs_3d single_drone_test.launch.py drone_id:=0
 ------------------------------------------------------------------
 
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"

@@ -108,10 +108,23 @@ class TakeoffPrimitive(BasePrimitive):
             self.set_error(f"Target altitude too high: {target_altitude}m (max 100m)")
             return False
         
-        # Check if armed
-        if self.current_state is None or not self.current_state.armed:
-            self.set_error("Drone must be armed before takeoff")
-            return False
+        # Ensure we have recent state information before proceeding
+        if self.current_state is None:
+            wait_start = time.time()
+            while self.current_state is None and (time.time() - wait_start) < 3.0:
+                time.sleep(0.1)
+            if self.current_state is None:
+                self.set_error("No state information received from MAVROS")
+                return False
+        
+        # Wait briefly for arming status after the arm service returns
+        if not self.current_state.armed:
+            wait_start = time.time()
+            while (not self.current_state.armed) and (time.time() - wait_start) < 3.0:
+                time.sleep(0.1)
+            if not self.current_state.armed:
+                self.set_error("Drone must be armed before takeoff")
+                return False
         
         # Set mode to GUIDED (required for ArduPilot)
         if not self._set_mode("GUIDED"):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flight Abstraction Layer (FAL) Node.
+"""Flight Abstraction Layer (FAL) Node - Fixed Version.
 
 This node provides ROS2 action servers for flight primitives and abstracts
 MAVROS communication for drone control.
@@ -7,11 +7,12 @@ MAVROS communication for drone control.
 
 import os
 import time
+import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from geometry_msgs.msg import Point
 
 from multi_drone_msgs.action import Takeoff, Land, GoToWaypoint, ExecutePrimitive
@@ -48,8 +49,10 @@ class FALNode(Node):
         self.drone_namespace = drone_namespace
         self.get_logger().info(f"Initializing FAL node for {drone_namespace}")
         
-        # Create callback group for concurrent action execution
-        self.callback_group = ReentrantCallbackGroup()
+        # Create callback groups
+        self.action_callback_group = ReentrantCallbackGroup()
+        self.service_callback_group = MutuallyExclusiveCallbackGroup()
+        self.timer_callback_group = ReentrantCallbackGroup()
         
         # Initialize primitives
         self.arm_primitive = ArmPrimitive(self, drone_namespace)
@@ -65,7 +68,7 @@ class FALNode(Node):
             self.takeoff_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.callback_group
+            callback_group=self.action_callback_group
         )
         
         self.land_action_server = ActionServer(
@@ -75,7 +78,7 @@ class FALNode(Node):
             self.land_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.callback_group
+            callback_group=self.action_callback_group
         )
         
         self.goto_action_server = ActionServer(
@@ -85,7 +88,7 @@ class FALNode(Node):
             self.goto_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.callback_group
+            callback_group=self.action_callback_group
         )
         
         self.execute_primitive_action_server = ActionServer(
@@ -95,22 +98,22 @@ class FALNode(Node):
             self.execute_primitive_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.callback_group
+            callback_group=self.action_callback_group
         )
         
-        # Create arm/disarm service
+        # Create arm/disarm service with async handling
         self.arm_service = self.create_service(
             ArmDisarm,
             f'{drone_namespace}/arm_disarm',
-            self.arm_disarm_callback,
-            callback_group=self.callback_group
+            self.arm_disarm_callback_async,
+            callback_group=self.service_callback_group
         )
         
         # Create timer for updating primitives
         self.update_timer = self.create_timer(
             0.05,  # 20 Hz
             self.update_callback,
-            callback_group=self.callback_group
+            callback_group=self.timer_callback_group
         )
         
         self.get_logger().info(f"FAL node initialized successfully")
@@ -141,6 +144,62 @@ class FALNode(Node):
         
         if self.land_primitive.get_state() == PrimitiveState.EXECUTING:
             self.land_primitive.update()
+            
+        # Also update arm primitive if executing
+        if self.arm_primitive.get_state() == PrimitiveState.EXECUTING:
+            self.arm_primitive.update()
+    
+    def arm_disarm_callback_async(self, request, response):
+        """Handle arm/disarm service requests with proper async handling."""
+        self.get_logger().info(f'Arm/disarm service called: arm={request.arm}')
+        
+        # Execute arm primitive
+        success = self.arm_primitive.execute(arm=request.arm, force=request.force, timeout=10.0)
+        
+        if not success:
+            response.success = False
+            response.message = self.arm_primitive.get_error_message()
+            response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
+            self.get_logger().error(f"Arm primitive execute failed: {response.message}")
+            return response
+        
+        # Wait for completion using a non-blocking approach
+        timeout = 15.0  # Total timeout
+        check_interval = 0.1  # Check every 100ms
+        start_time = time.time()
+        
+        self.get_logger().info(f"Waiting for arm/disarm completion (timeout={timeout}s)...")
+        
+        while time.time() - start_time < timeout:
+            # Update the primitive state
+            state = self.arm_primitive.update()
+            
+            # Check for completion
+            if state == PrimitiveState.SUCCESS:
+                response.success = True
+                response.message = f"{'Armed' if request.arm else 'Disarmed'} successfully"
+                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
+                self.get_logger().info(response.message)
+                return response
+            elif state == PrimitiveState.FAILED:
+                response.success = False
+                response.message = self.arm_primitive.get_error_message()
+                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
+                self.get_logger().error(f"Arm primitive failed: {response.message}")
+                return response
+            
+            # Sleep briefly to allow other callbacks to process
+            # This is key - we need to yield control to allow state callbacks
+            time.sleep(check_interval)
+            
+            # Spin once to process callbacks (critical for getting state updates)
+            rclpy.spin_once(self, timeout_sec=0.01)
+        
+        response.success = False
+        response.message = f"Arm/disarm timeout after {timeout}s"
+        response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
+        self.get_logger().error(response.message)
+        return response
     
     async def takeoff_execute_callback(self, goal_handle):
         """Execute takeoff action."""
@@ -373,61 +432,6 @@ class FALNode(Node):
             result.success = False
             result.message = f"Unknown primitive type: {primitive_type}"
             return result
-    
-    def arm_disarm_callback(self, request, response):
-        """Handle arm/disarm service requests."""
-        self.get_logger().info(f'Arm/disarm service called: arm={request.arm}')
-        
-        # Execute arm primitive with longer timeout
-        success = self.arm_primitive.execute(arm=request.arm, force=request.force, timeout=10.0)
-        
-        if not success:
-            response.success = False
-            response.message = self.arm_primitive.get_error_message()
-            response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
-            self.get_logger().error(f"Arm primitive execute failed: {response.message}")
-            return response
-        
-        # Wait for completion (with timeout)
-        timeout = 15.0  # Longer than primitive timeout
-        start_time = time.time()
-        loop_count = 0
-        
-        self.get_logger().info(f"Waiting for arm/disarm completion (timeout={timeout}s)...")
-        
-        while time.time() - start_time < timeout:
-            loop_count += 1
-            
-            # Update primitive state
-            state = self.arm_primitive.update()
-            
-            # Log every half second for better visibility
-            if loop_count % 5 == 0:
-                elapsed = time.time() - start_time
-                current_armed = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else None
-                self.get_logger().info(f"Waiting... elapsed={elapsed:.1f}s, state={state}, current_armed={current_armed}, target={request.arm}")
-            
-            if state == PrimitiveState.SUCCESS:
-                response.success = True
-                response.message = f"{'Armed' if request.arm else 'Disarmed'} successfully"
-                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
-                self.get_logger().info(response.message)
-                return response
-            elif state == PrimitiveState.FAILED:
-                response.success = False
-                response.message = self.arm_primitive.get_error_message()
-                response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
-                self.get_logger().error(f"Arm primitive failed: {response.message}")
-                return response
-            
-            # Small sleep to prevent busy waiting
-            time.sleep(0.1)
-        
-        response.success = False
-        response.message = f"Arm/disarm service callback timeout after {timeout}s"
-        response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
-        self.get_logger().error(response.message)
-        return response
 
 
 def main(args=None):
@@ -443,11 +447,8 @@ def main(args=None):
     # Create and spin the FAL node
     fal_node = FALNode(drone_namespace=drone_namespace)
     
-    # Use multi-threaded executor with enough worker threads so callbacks like
-    # mavros/state can keep updating while synchronous service handlers wait.
-    thread_count = max(2, os.cpu_count() or 2)
-    executor = MultiThreadedExecutor(num_threads=thread_count)
-    fal_node.get_logger().info(f"MultiThreadedExecutor using {thread_count} threads")
+    # Use multi-threaded executor
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(fal_node)
     
     try:
