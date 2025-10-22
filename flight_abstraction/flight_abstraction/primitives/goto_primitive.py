@@ -6,7 +6,7 @@ import math
 from typing import Optional
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from mavros_msgs.msg import State, PositionTarget
 from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Odometry
@@ -22,13 +22,14 @@ class GotoPrimitive(BasePrimitive):
     monitors progress until the waypoint is reached.
     """
     
-    def __init__(self, node: Node, drone_namespace: str):
+    def __init__(self, node: Node, drone_namespace: str, callback_group=None):
         """
         Initialize the goto primitive.
         
         Args:
             node: ROS2 node for communication
             drone_namespace: Namespace for this drone (e.g., '/drone_0')
+            callback_group: Optional callback group for subscriptions
         """
         super().__init__(node, drone_namespace)
         
@@ -40,9 +41,17 @@ class GotoPrimitive(BasePrimitive):
             10
         )
         
-        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
-        qos_profile = QoSProfile(
+        # QoS profile for MAVROS state topic (RELIABLE + TRANSIENT_LOCAL)
+        state_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        # QoS profile for MAVROS pose topic (BEST_EFFORT for sensor data)
+        pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -53,7 +62,8 @@ class GotoPrimitive(BasePrimitive):
             State,
             state_topic,
             self._state_callback,
-            qos_profile
+            state_qos,
+            callback_group=callback_group
         )
         
         local_pos_topic = f"{drone_namespace}/mavros/local_position/pose"
@@ -61,7 +71,8 @@ class GotoPrimitive(BasePrimitive):
             PoseStamped,
             local_pos_topic,
             self._local_pos_callback,
-            qos_profile
+            pose_qos,
+            callback_group=callback_group
         )
         
         # State tracking

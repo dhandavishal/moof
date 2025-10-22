@@ -230,7 +230,7 @@ class SingleDroneTest(Node):
         
         if result.success:
             self.get_logger().info(f'Waypoint reached: {result.message}')
-            self.test_results.append((f'Goto ({x},{y},{z})', True, f'Error: {result.final_distance_error:.2f}m'))
+            self.test_results.append((f'Goto ({x},{y},{z})', True, f'Error: {result.distance_error:.2f}m'))
             return True
         else:
             self.get_logger().error(f'Goto failed: {result.message}')

@@ -6,7 +6,12 @@ import math
 from typing import Optional
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import (
+    QoSProfile,
+    ReliabilityPolicy,
+    HistoryPolicy,
+    QoSDurabilityPolicy,
+)
 from mavros_msgs.srv import CommandTOL, SetMode
 from mavros_msgs.msg import State
 from geometry_msgs.msg import PoseStamped
@@ -22,13 +27,14 @@ class TakeoffPrimitive(BasePrimitive):
     until the target is reached.
     """
     
-    def __init__(self, node: Node, drone_namespace: str):
+    def __init__(self, node: Node, drone_namespace: str, callback_group=None):
         """
         Initialize the takeoff primitive.
         
         Args:
             node: ROS2 node for communication
             drone_namespace: Namespace for this drone (e.g., '/drone_0')
+            callback_group: Optional callback group for subscriptions
         """
         super().__init__(node, drone_namespace)
         
@@ -39,11 +45,19 @@ class TakeoffPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
-        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
-        qos_profile = QoSProfile(
+        # QoS profiles for MAVROS topics
+        state_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=10,
+        )
+
+        pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
         )
         
         # Subscribe to state and local position
@@ -52,7 +66,8 @@ class TakeoffPrimitive(BasePrimitive):
             State,
             state_topic,
             self._state_callback,
-            qos_profile
+            state_qos,
+            callback_group=callback_group
         )
         
         local_pos_topic = f"{drone_namespace}/mavros/local_position/pose"
@@ -60,7 +75,8 @@ class TakeoffPrimitive(BasePrimitive):
             PoseStamped,
             local_pos_topic,
             self._local_pos_callback,
-            qos_profile
+            pose_qos,
+            callback_group=callback_group
         )
         
         # State tracking
@@ -108,23 +124,15 @@ class TakeoffPrimitive(BasePrimitive):
             self.set_error(f"Target altitude too high: {target_altitude}m (max 100m)")
             return False
         
-        # Ensure we have recent state information before proceeding
+        # Check if we have state information
         if self.current_state is None:
-            wait_start = time.time()
-            while self.current_state is None and (time.time() - wait_start) < 3.0:
-                time.sleep(0.1)
-            if self.current_state is None:
-                self.set_error("No state information received from MAVROS")
-                return False
+            self.set_error("No state information received from MAVROS")
+            return False
         
-        # Wait briefly for arming status after the arm service returns
+        # Check if drone is armed (don't wait, just check current state)
         if not self.current_state.armed:
-            wait_start = time.time()
-            while (not self.current_state.armed) and (time.time() - wait_start) < 3.0:
-                time.sleep(0.1)
-            if not self.current_state.armed:
-                self.set_error("Drone must be armed before takeoff")
-                return False
+            self.set_error("Drone must be armed before takeoff")
+            return False
         
         # Set mode to GUIDED (required for ArduPilot)
         if not self._set_mode("GUIDED"):
@@ -149,10 +157,12 @@ class TakeoffPrimitive(BasePrimitive):
         try:
             future = self.takeoff_client.call_async(request)
             
-            # Wait for response
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            # Wait for future without spinning executor
+            wait_start = time.time()
+            while not future.done() and (time.time() - wait_start) < 2.0:
+                time.sleep(0.05)  # Yield thread
             
-            if future.result() is not None:
+            if future.done() and future.result() is not None:
                 response = future.result()
                 if response.success:
                     self.state = PrimitiveState.EXECUTING
@@ -189,9 +199,13 @@ class TakeoffPrimitive(BasePrimitive):
         
         try:
             future = self.setmode_client.call_async(request)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+
+            # Wait for future without spinning executor
+            wait_start = time.time()
+            while not future.done() and (time.time() - wait_start) < 2.0:
+                time.sleep(0.05)  # Yield thread
             
-            if future.result() is not None:
+            if future.done() and future.result() is not None:
                 response = future.result()
                 if response.mode_sent:
                     self.logger.info(f"Mode set to {mode}")

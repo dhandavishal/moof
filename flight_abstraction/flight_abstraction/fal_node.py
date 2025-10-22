@@ -49,16 +49,17 @@ class FALNode(Node):
         self.drone_namespace = drone_namespace
         self.get_logger().info(f"Initializing FAL node for {drone_namespace}")
         
-        # Create callback groups
+        # Create callback groups - all Reentrant to allow concurrent execution
         self.action_callback_group = ReentrantCallbackGroup()
-        self.service_callback_group = MutuallyExclusiveCallbackGroup()
+        self.service_callback_group = ReentrantCallbackGroup()
         self.timer_callback_group = ReentrantCallbackGroup()
+        self.subscription_callback_group = ReentrantCallbackGroup()
         
-        # Initialize primitives
-        self.arm_primitive = ArmPrimitive(self, drone_namespace)
-        self.takeoff_primitive = TakeoffPrimitive(self, drone_namespace)
-        self.goto_primitive = GotoPrimitive(self, drone_namespace)
-        self.land_primitive = LandPrimitive(self, drone_namespace)
+        # Initialize primitives with shared subscription callback group
+        self.arm_primitive = ArmPrimitive(self, drone_namespace, self.subscription_callback_group)
+        self.takeoff_primitive = TakeoffPrimitive(self, drone_namespace, self.subscription_callback_group)
+        self.goto_primitive = GotoPrimitive(self, drone_namespace, self.subscription_callback_group)
+        self.land_primitive = LandPrimitive(self, drone_namespace, self.subscription_callback_group)
         
         # Create action servers
         self.takeoff_action_server = ActionServer(
@@ -125,7 +126,7 @@ class FALNode(Node):
     
     def goal_callback(self, goal_request):
         """Accept all goal requests."""
-        self.get_logger().info('Received new goal request')
+        self.get_logger().info(f'Received new goal request: {type(goal_request).__name__}')
         return GoalResponse.ACCEPT
     
     def cancel_callback(self, goal_handle):
@@ -135,7 +136,11 @@ class FALNode(Node):
     
     def update_callback(self):
         """Update all active primitives."""
-        # Update primitives that are executing
+        # Update arm primitive if executing (check this first as it's fast)
+        if self.arm_primitive.get_state() == PrimitiveState.EXECUTING:
+            self.arm_primitive.update()
+            
+        # Update other primitives that are executing
         if self.takeoff_primitive.get_state() == PrimitiveState.EXECUTING:
             self.takeoff_primitive.update()
         
@@ -144,16 +149,13 @@ class FALNode(Node):
         
         if self.land_primitive.get_state() == PrimitiveState.EXECUTING:
             self.land_primitive.update()
-            
-        # Also update arm primitive if executing
-        if self.arm_primitive.get_state() == PrimitiveState.EXECUTING:
-            self.arm_primitive.update()
     
     def arm_disarm_callback_async(self, request, response):
         """Handle arm/disarm service requests with proper async handling."""
         self.get_logger().info(f'Arm/disarm service called: arm={request.arm}')
         
-        # Execute arm primitive
+        # Execute arm primitive (this sends the command and returns immediately)
+        # The main update_timer will now handle polling
         success = self.arm_primitive.execute(arm=request.arm, force=request.force, timeout=10.0)
         
         if not success:
@@ -171,8 +173,8 @@ class FALNode(Node):
         self.get_logger().info(f"Waiting for arm/disarm completion (timeout={timeout}s)...")
         
         while time.time() - start_time < timeout:
-            # Update the primitive state
-            state = self.arm_primitive.update()
+            # We just check the state, which is updated by the main update_timer callback
+            state = self.arm_primitive.get_state()
             
             # Check for completion
             if state == PrimitiveState.SUCCESS:
@@ -188,13 +190,11 @@ class FALNode(Node):
                 self.get_logger().error(f"Arm primitive failed: {response.message}")
                 return response
             
-            # Sleep briefly to allow other callbacks to process
-            # This is key - we need to yield control to allow state callbacks
+            # Sleep briefly to yield the thread, allowing other callbacks to run
+            # DO NOT SPIN. Just sleep.
             time.sleep(check_interval)
-            
-            # Spin once to process callbacks (critical for getting state updates)
-            rclpy.spin_once(self, timeout_sec=0.01)
         
+        # If we get here, it timed out
         response.success = False
         response.message = f"Arm/disarm timeout after {timeout}s"
         response.current_armed_state = self.arm_primitive.current_state.armed if self.arm_primitive.current_state else False
@@ -239,7 +239,7 @@ class FALNode(Node):
             # Publish feedback
             feedback = Takeoff.Feedback()
             feedback.current_altitude = self.takeoff_primitive.current_altitude
-            feedback.progress_percentage = self.takeoff_primitive.get_progress()
+            feedback.progress = self.takeoff_primitive.get_progress()
             goal_handle.publish_feedback(feedback)
             
             # Check completion
@@ -281,7 +281,7 @@ class FALNode(Node):
             result = Land.Result()
             result.success = False
             result.message = self.land_primitive.get_error_message()
-            result.final_altitude = self.land_primitive.current_altitude
+            result.final_position = self.land_primitive.current_position
             return result
         
         # Monitor progress
@@ -294,7 +294,7 @@ class FALNode(Node):
                     result = Land.Result()
                     result.success = False
                     result.message = "Landing cancelled"
-                    result.final_altitude = self.land_primitive.current_altitude
+                    result.final_position = self.land_primitive.current_position
                     return result
             
             # Update primitive
@@ -303,7 +303,7 @@ class FALNode(Node):
             # Publish feedback
             feedback = Land.Feedback()
             feedback.current_altitude = self.land_primitive.current_altitude
-            feedback.progress_percentage = self.land_primitive.get_progress()
+            feedback.progress = self.land_primitive.get_progress()
             goal_handle.publish_feedback(feedback)
             
             # Check completion
@@ -312,14 +312,14 @@ class FALNode(Node):
                 result = Land.Result()
                 result.success = True
                 result.message = "Landing completed successfully"
-                result.final_altitude = self.land_primitive.current_altitude
+                result.final_position = self.land_primitive.current_position
                 return result
             elif state == PrimitiveState.FAILED:
                 goal_handle.abort()
                 result = Land.Result()
                 result.success = False
                 result.message = self.land_primitive.get_error_message()
-                result.final_altitude = self.land_primitive.current_altitude
+                result.final_position = self.land_primitive.current_position
                 return result
             
             rate.sleep()
@@ -343,7 +343,7 @@ class FALNode(Node):
             result = GoToWaypoint.Result()
             result.success = False
             result.message = self.goto_primitive.get_error_message()
-            result.final_distance_error = self.goto_primitive.get_distance_remaining()
+            result.distance_error = self.goto_primitive.get_distance_remaining()
             return result
         
         # Monitor progress
@@ -356,7 +356,7 @@ class FALNode(Node):
                 result = GoToWaypoint.Result()
                 result.success = False
                 result.message = "Goto cancelled"
-                result.final_distance_error = self.goto_primitive.get_distance_remaining()
+                result.distance_error = self.goto_primitive.get_distance_remaining()
                 return result
             
             # Update primitive
@@ -375,14 +375,14 @@ class FALNode(Node):
                 result = GoToWaypoint.Result()
                 result.success = True
                 result.message = "Waypoint reached successfully"
-                result.final_distance_error = self.goto_primitive.get_distance_remaining()
+                result.distance_error = self.goto_primitive.get_distance_remaining()
                 return result
             elif state == PrimitiveState.FAILED:
                 goal_handle.abort()
                 result = GoToWaypoint.Result()
                 result.success = False
                 result.message = self.goto_primitive.get_error_message()
-                result.final_distance_error = self.goto_primitive.get_distance_remaining()
+                result.distance_error = self.goto_primitive.get_distance_remaining()
                 return result
             
             rate.sleep()

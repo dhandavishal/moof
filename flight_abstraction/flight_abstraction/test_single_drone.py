@@ -180,7 +180,7 @@ class SingleDroneTest(Node):
         feedback = feedback_msg.feedback
         self.get_logger().info(
             f'  Takeoff: altitude={feedback.current_altitude:.2f}m, '
-            f'progress={feedback.progress_percentage:.1f}%',
+            f'progress={feedback.progress:.1f}%',
             throttle_duration_sec=2.0
         )
     
@@ -230,7 +230,7 @@ class SingleDroneTest(Node):
         
         if result.success:
             self.get_logger().info(f'Waypoint reached: {result.message}')
-            self.test_results.append((f'Goto ({x},{y},{z})', True, f'Error: {result.final_distance_error:.2f}m'))
+            self.test_results.append((f'Goto ({x},{y},{z})', True, f'Error: {result.distance_error:.2f}m'))
             return True
         else:
             self.get_logger().error(f'Goto failed: {result.message}')
@@ -290,7 +290,7 @@ class SingleDroneTest(Node):
         
         if result.success:
             self.get_logger().info(f'Landing successful: {result.message}')
-            self.test_results.append(('Land', True, f'Altitude: {result.final_altitude:.2f}m'))
+            self.test_results.append(('Land', True, f'Position: ({result.final_position.x:.2f}, {result.final_position.y:.2f}, {result.final_position.z:.2f})'))
             return True
         else:
             self.get_logger().error(f'Landing failed: {result.message}')
@@ -299,12 +299,12 @@ class SingleDroneTest(Node):
             return False
     
     def _land_feedback(self, feedback_msg):
-        """Callback for land feedback."""
+        """Handle land action feedback"""
         feedback = feedback_msg.feedback
         self.get_logger().info(
-            f'  Land: altitude={feedback.current_altitude:.2f}m, '
-            f'progress={feedback.progress_percentage:.1f}%',
-            throttle_duration_sec=2.0
+            f'Landing: {feedback.current_altitude:.2f}m, '
+            f'Progress: {feedback.progress:.1f}%, '
+            f'Status: {feedback.status}'
         )
     
     def print_summary(self):

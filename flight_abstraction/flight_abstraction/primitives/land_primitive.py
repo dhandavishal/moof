@@ -6,7 +6,7 @@ import math
 from typing import Optional
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from mavros_msgs.srv import CommandTOL, SetMode
 from mavros_msgs.msg import State, ExtendedState
 from geometry_msgs.msg import PoseStamped, Point
@@ -22,13 +22,14 @@ class LandPrimitive(BasePrimitive):
     state until touchdown is confirmed.
     """
     
-    def __init__(self, node: Node, drone_namespace: str):
+    def __init__(self, node: Node, drone_namespace: str, callback_group=None):
         """
         Initialize the land primitive.
         
         Args:
             node: ROS2 node for communication
             drone_namespace: Namespace for this drone (e.g., '/drone_0')
+            callback_group: Optional callback group for subscriptions
         """
         super().__init__(node, drone_namespace)
         
@@ -39,9 +40,17 @@ class LandPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
-        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
-        qos_profile = QoSProfile(
+        # QoS profile for MAVROS state topics (RELIABLE + TRANSIENT_LOCAL)
+        state_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        # QoS profile for MAVROS pose topic (BEST_EFFORT for sensor data)
+        pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -52,7 +61,8 @@ class LandPrimitive(BasePrimitive):
             State,
             state_topic,
             self._state_callback,
-            qos_profile
+            state_qos,
+            callback_group=callback_group
         )
         
         extended_state_topic = f"{drone_namespace}/mavros/extended_state"
@@ -60,7 +70,8 @@ class LandPrimitive(BasePrimitive):
             ExtendedState,
             extended_state_topic,
             self._extended_state_callback,
-            qos_profile
+            state_qos,
+            callback_group=callback_group
         )
         
         local_pos_topic = f"{drone_namespace}/mavros/local_position/pose"
@@ -68,7 +79,8 @@ class LandPrimitive(BasePrimitive):
             PoseStamped,
             local_pos_topic,
             self._local_pos_callback,
-            qos_profile
+            pose_qos,
+            callback_group=callback_group
         )
         
         # State tracking
@@ -76,6 +88,7 @@ class LandPrimitive(BasePrimitive):
         self.current_extended_state: Optional[ExtendedState] = None
         self.current_altitude = 0.0
         self.initial_altitude = 0.0
+        self.current_position = Point()
         self.target_position: Optional[Point] = None
         self.descent_rate = 0.5  # m/s
         self.ground_altitude_threshold = 0.3  # meters
@@ -95,6 +108,7 @@ class LandPrimitive(BasePrimitive):
     def _local_pos_callback(self, msg: PoseStamped):
         """Callback for local position updates."""
         self.current_altitude = msg.pose.position.z
+        self.current_position = msg.pose.position
         
     def execute(self, target_position: Optional[Point] = None, 
                 descent_rate: float = 0.5, timeout: float = 60.0) -> bool:
@@ -155,10 +169,12 @@ class LandPrimitive(BasePrimitive):
         try:
             future = self.land_client.call_async(request)
             
-            # Wait for response
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            # Wait for response without spinning
+            wait_start = time.time()
+            while not future.done() and (time.time() - wait_start) < 2.0:
+                time.sleep(0.05)
             
-            if future.result() is not None:
+            if future.done():
                 response = future.result()
                 if response.success:
                     self.state = PrimitiveState.EXECUTING
@@ -195,9 +211,13 @@ class LandPrimitive(BasePrimitive):
         
         try:
             future = self.setmode_client.call_async(request)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
             
-            if future.result() is not None:
+            # Wait for response without spinning
+            wait_start = time.time()
+            while not future.done() and (time.time() - wait_start) < 2.0:
+                time.sleep(0.05)
+            
+            if future.done():
                 response = future.result()
                 if response.mode_sent:
                     self.logger.info(f"Mode set to {mode}")

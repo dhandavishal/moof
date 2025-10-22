@@ -5,7 +5,7 @@ import time
 from typing import Optional
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from mavros_msgs.srv import CommandBool, SetMode
 from mavros_msgs.msg import State
 
@@ -20,13 +20,14 @@ class ArmPrimitive(BasePrimitive):
     the arming state to confirm successful execution.
     """
     
-    def __init__(self, node: Node, drone_namespace: str):
+    def __init__(self, node: Node, drone_namespace: str, callback_group=None):
         """
         Initialize the arm primitive.
         
         Args:
             node: ROS2 node for communication
             drone_namespace: Namespace for this drone (e.g., '/drone_0')
+            callback_group: Optional callback group for subscriptions
         """
         super().__init__(node, drone_namespace)
         
@@ -38,9 +39,10 @@ class ArmPrimitive(BasePrimitive):
         setmode_service_name = f"{drone_namespace}/mavros/set_mode"
         self.setmode_client = node.create_client(SetMode, setmode_service_name)
         
-        # QoS profile for MAVROS topics (reliable matches MAVROS defaults)
+        # QoS profile for MAVROS state topic (RELIABLE + TRANSIENT_LOCAL)
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -51,7 +53,8 @@ class ArmPrimitive(BasePrimitive):
             State,
             state_topic,
             self._state_callback,
-            qos_profile
+            qos_profile,
+            callback_group=callback_group
         )
         
         # State tracking
@@ -61,9 +64,14 @@ class ArmPrimitive(BasePrimitive):
         self.timeout = 5.0  # seconds
         
         self.logger.info(f"ArmPrimitive initialized for {drone_namespace}")
+        self._callback_count = 0
         
     def _state_callback(self, msg: State):
         """Callback for MAVROS state updates."""
+        self._callback_count += 1
+        if self._callback_count <= 3:
+            self.logger.info(f"ArmPrimitive state callback #{self._callback_count}: armed={msg.armed}, connected={msg.connected}")
+        
         old_armed = self.current_state.armed if self.current_state else None
         self.current_state = msg
         
@@ -71,9 +79,9 @@ class ArmPrimitive(BasePrimitive):
         if old_armed is not None and old_armed != msg.armed:
             self.logger.info(f"Armed state changed: {old_armed} -> {msg.armed}")
         
-        # Also log during EXECUTING state to debug
+        # Log every callback during EXECUTING state to debug subscription issues
         if self.state == PrimitiveState.EXECUTING:
-            self.logger.debug(f"State callback: armed={msg.armed}, mode={msg.mode}, connected={msg.connected}")
+            self.logger.info(f"State callback during EXECUTING: armed={msg.armed}, mode={msg.mode}, connected={msg.connected}")
         
     def execute(self, arm: bool = True, force: bool = False, timeout: float = 5.0) -> bool:
         """
@@ -100,14 +108,9 @@ class ArmPrimitive(BasePrimitive):
             self.set_error(f"SetMode service not available: {self.setmode_client.srv_name}")
             return False
         
-        # Wait for initial state to be received
-        wait_start = time.time()
-        while self.current_state is None and (time.time() - wait_start) < 2.0:
-            time.sleep(0.1)
-        
         # Check current state
         if self.current_state is None:
-            self.set_error("No state information received from MAVROS")
+            self.set_error("No state information received from MAVROS (is MAVROS running?)")
             return False
         
         # If arming, set GUIDED mode first
@@ -118,15 +121,20 @@ class ArmPrimitive(BasePrimitive):
             
             try:
                 mode_future = self.setmode_client.call_async(mode_request)
-                rclpy.spin_until_future_complete(self.node, mode_future, timeout_sec=2.0)
                 
-                if mode_future.result() is not None:
+                # Wait for future without spinning executor
+                wait_start = time.time()
+                while not mode_future.done() and (time.time() - wait_start) < 2.0:
+                    time.sleep(0.05)  # Yield thread
+                
+                if mode_future.done() and mode_future.result() is not None:
                     mode_response = mode_future.result()
                     if not mode_response.mode_sent:
                         self.set_error("Failed to set GUIDED mode")
                         return False
                     self.logger.info("GUIDED mode set successfully")
-                    # Wait longer for mode to take effect
+                    
+                    # Wait for mode to take effect (this sleep is fine)
                     time.sleep(1.0)
                 else:
                     self.set_error("SetMode service call timed out")
@@ -150,16 +158,17 @@ class ArmPrimitive(BasePrimitive):
         try:
             future = self.arm_client.call_async(request)
             
-            # Wait for response
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            # Wait for future without spinning executor
+            wait_start = time.time()
+            while not future.done() and (time.time() - wait_start) < 2.0:
+                time.sleep(0.05)  # Yield thread
             
-            if future.result() is not None:
+            if future.done() and future.result() is not None:
                 response = future.result()
                 if response.success:
                     self.state = PrimitiveState.EXECUTING
                     self.command_sent_time = time.time()
                     self.logger.info(f"{'Arm' if arm else 'Disarm'} command sent successfully")
-                    # Don't sleep here - let the update loop check immediately
                     return True
                 else:
                     self.set_error(f"Arm command rejected: {response.result}")
