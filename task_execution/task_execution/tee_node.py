@@ -31,7 +31,10 @@ from task_execution.monitors.progress_monitor import ProgressMonitor
 
 # Messages
 from multi_drone_msgs.msg import PrimitiveCommand, PrimitiveStatus
+from multi_drone_msgs.action import Takeoff, Land, GoToWaypoint, ExecutePrimitive
+from multi_drone_msgs.srv import ArmDisarm
 from std_msgs.msg import Empty, String
+from rclpy.action import ActionClient
 
 
 class TaskExecutionEngineNode(Node):
@@ -59,10 +62,13 @@ class TaskExecutionEngineNode(Node):
         self.validator = TaskValidator(self, self.config)
         
         # Initialize monitors
-        self.battery_monitor = BatteryMonitor(self)
-        self.gps_monitor = GPSMonitor(self)
+        self.battery_monitor = BatteryMonitor(self, self.config, namespace='/drone_0')
+        self.gps_monitor = GPSMonitor(self, self.config, namespace='/drone_0')
         self.health_monitor = HealthMonitor(self, self.battery_monitor, self.gps_monitor)
         self.progress_monitor = ProgressMonitor(self)
+        
+        # Drone namespace
+        self.drone_namespace = '/drone_0'  # TODO: Make configurable
         
         # Publisher for primitive commands (TEE -> FAL)
         self.primitive_pub = self.create_publisher(
@@ -71,11 +77,49 @@ class TaskExecutionEngineNode(Node):
             100
         )
         
+        # FAL Action Clients - for direct action-based communication
+        self.get_logger().info(f"Creating FAL action clients for {self.drone_namespace}")
+        
+        self.arm_client = self.create_client(
+            ArmDisarm,
+            f'{self.drone_namespace}/arm_disarm'
+        )
+        
+        self.takeoff_action_client = ActionClient(
+            self,
+            Takeoff,
+            f'{self.drone_namespace}/takeoff',
+            callback_group=self.callback_group
+        )
+        
+        self.land_action_client = ActionClient(
+            self,
+            Land,
+            f'{self.drone_namespace}/land',
+            callback_group=self.callback_group
+        )
+        
+        self.goto_action_client = ActionClient(
+            self,
+            GoToWaypoint,
+            f'{self.drone_namespace}/goto_waypoint',
+            callback_group=self.callback_group
+        )
+        
+        self.execute_primitive_action_client = ActionClient(
+            self,
+            ExecutePrimitive,
+            f'{self.drone_namespace}/execute_primitive',
+            callback_group=self.callback_group
+        )
+        
+        self.get_logger().info("FAL action clients created")
+        
         # Initialize executors
         self.executors = {
-            'waypoint': WaypointExecutor(self, self),
-            'survey': SurveyExecutor(self, self),
-            'search': SearchExecutor(self, self)
+            'waypoint': WaypointExecutor(self.config),
+            'survey': SurveyExecutor(self.config),
+            'search': SearchExecutor(self.config)
         }
         
         # Execution state

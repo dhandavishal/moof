@@ -86,8 +86,8 @@ class GPSMonitor:
         )
         
         # ROS communication
-        gps_topic = f'/{namespace}/mavros/global_position/global' if namespace else '/mavros/global_position/global'
-        health_topic = f'/{namespace}/tee/health/gps' if namespace else '/tee/health/gps'
+        gps_topic = f'{namespace}/mavros/global_position/global' if namespace else '/mavros/global_position/global'
+        health_topic = f'{namespace}/tee/health/gps' if namespace else '/tee/health/gps'
         
         self.gps_sub = self.node.create_subscription(
             NavSatFix,

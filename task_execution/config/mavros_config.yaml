@@ -1,0 +1,34 @@
+# MAVROS Configuration for ArduPilot SITL
+# This disables the problematic companion_process plugin that causes subscription conflicts
+
+# Basic connection settings
+fcu_url: "udp://:14550@127.0.0.1:14555"
+fcu_protocol: "v2.0"
+target_system_id: 1
+target_component_id: 1
+
+# Plugin settings - explicitly disable companion_process
+plugin_blacklist:
+  - "companion_process_status"
+  - "companion"
+
+# Enable essential plugins
+plugin_whitelist:
+  - "actuator_control"
+  - "altitude"
+  - "battery"
+  - "command"
+  - "global_position"
+  - "gps_rtk"
+  - "home_position"
+  - "imu"
+  - "local_position"
+  - "mission"
+  - "param"
+  - "rc_io"
+  - "setpoint_attitude"
+  - "setpoint_position"
+  - "setpoint_velocity"
+  - "sys_status"
+  - "sys_time"
+  - "waypoint"

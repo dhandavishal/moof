@@ -82,8 +82,8 @@ class BatteryMonitor:
         )
         
         # ROS communication
-        battery_topic = f'/{namespace}/mavros/battery' if namespace else '/mavros/battery'
-        health_topic = f'/{namespace}/tee/health/battery' if namespace else '/tee/health/battery'
+        battery_topic = f'{namespace}/mavros/battery' if namespace else '/mavros/battery'
+        health_topic = f'{namespace}/tee/health/battery' if namespace else '/tee/health/battery'
         
         self.battery_sub = self.node.create_subscription(
             BatteryState,

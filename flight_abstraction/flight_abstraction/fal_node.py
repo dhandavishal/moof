@@ -17,7 +17,7 @@ from geometry_msgs.msg import Point
 
 from multi_drone_msgs.action import Takeoff, Land, GoToWaypoint, ExecutePrimitive
 from multi_drone_msgs.srv import ArmDisarm
-from multi_drone_msgs.msg import DroneStatus
+from multi_drone_msgs.msg import DroneStatus, PrimitiveCommand, PrimitiveStatus
 
 from flight_abstraction.primitives import (
     ArmPrimitive,
@@ -110,6 +110,27 @@ class FALNode(Node):
             callback_group=self.service_callback_group
         )
         
+        # Topic-based communication with TEE
+        # Subscribe to primitive commands from TEE
+        self.primitive_command_sub = self.create_subscription(
+            PrimitiveCommand,
+            '/tee/primitive_command',
+            self.primitive_command_callback,
+            10,
+            callback_group=self.subscription_callback_group
+        )
+        
+        # Publish primitive status to TEE
+        self.primitive_status_pub = self.create_publisher(
+            PrimitiveStatus,
+            '/fal/primitive_status',
+            10
+        )
+        
+        # Track currently executing topic-based primitive
+        self.current_topic_primitive = None
+        self.current_primitive_id = None
+        
         # Create timer for updating primitives
         self.update_timer = self.create_timer(
             0.05,  # 20 Hz
@@ -123,6 +144,8 @@ class FALNode(Node):
         self.get_logger().info(f"  - GoToWaypoint action: {drone_namespace}/goto_waypoint")
         self.get_logger().info(f"  - ExecutePrimitive action: {drone_namespace}/execute_primitive")
         self.get_logger().info(f"  - ArmDisarm service: {drone_namespace}/arm_disarm")
+        self.get_logger().info(f"  - Subscribed to: /tee/primitive_command")
+        self.get_logger().info(f"  - Publishing to: /fal/primitive_status")
     
     def goal_callback(self, goal_request):
         """Accept all goal requests."""
@@ -149,6 +172,125 @@ class FALNode(Node):
         
         if self.land_primitive.get_state() == PrimitiveState.EXECUTING:
             self.land_primitive.update()
+        
+        # Check topic-based primitive status and publish updates
+        if self.current_topic_primitive is not None:
+            state = self.current_topic_primitive.get_state()
+            status_msg = PrimitiveStatus()
+            status_msg.command_id = self.current_primitive_id
+            status_msg.progress = 0.5 if state == PrimitiveState.EXECUTING else 0.0
+            
+            if state == PrimitiveState.IDLE:
+                status_msg.status = 'idle'
+                status_msg.progress = 0.0
+            elif state == PrimitiveState.EXECUTING:
+                status_msg.status = 'executing'
+                status_msg.progress = 0.5
+            elif state == PrimitiveState.SUCCESS:
+                status_msg.status = 'completed'
+                status_msg.progress = 1.0
+                status_msg.error_message = 'Primitive completed successfully'
+                self.primitive_status_pub.publish(status_msg)
+                self.get_logger().info(f"Primitive {self.current_primitive_id} completed successfully")
+                self.current_topic_primitive = None
+                self.current_primitive_id = None
+            elif state == PrimitiveState.FAILED:
+                status_msg.status = 'failed'
+                status_msg.progress = 0.0
+                status_msg.error_message = self.current_topic_primitive.get_error_message()
+                self.primitive_status_pub.publish(status_msg)
+                self.get_logger().error(f"Primitive {self.current_primitive_id} failed: {status_msg.error_message}")
+                self.current_topic_primitive = None
+                self.current_primitive_id = None
+            else:
+                status_msg.status = 'unknown'
+                status_msg.progress = 0.0
+            
+            # Publish status updates for executing primitives
+            if state == PrimitiveState.EXECUTING:
+                self.primitive_status_pub.publish(status_msg)
+    
+    def _get_primitive_type_string(self, primitive):
+        """Get string representation of primitive type."""
+        if isinstance(primitive, ArmPrimitive):
+            return 'arm'
+        elif isinstance(primitive, TakeoffPrimitive):
+            return 'takeoff'
+        elif isinstance(primitive, GotoPrimitive):
+            return 'goto'
+        elif isinstance(primitive, LandPrimitive):
+            return 'land'
+        else:
+            return 'unknown'
+    
+    def primitive_command_callback(self, msg: PrimitiveCommand):
+        """Handle primitive commands from TEE via topic."""
+        self.get_logger().info(f"Received primitive command: {msg.primitive_type} (ID: {msg.command_id})")
+        
+        # Check if we're already executing a primitive
+        if self.current_topic_primitive is not None:
+            current_state = self.current_topic_primitive.get_state()
+            if current_state == PrimitiveState.EXECUTING:
+                self.get_logger().warn(f"Ignoring command - primitive {self.current_primitive_id} still executing")
+                status_msg = PrimitiveStatus()
+                status_msg.command_id = msg.command_id
+                status_msg.status = 'rejected'
+                status_msg.error_message = f'Already executing primitive {self.current_primitive_id}'
+                self.primitive_status_pub.publish(status_msg)
+                return
+        
+        # Store primitive ID for tracking
+        self.current_primitive_id = msg.command_id
+        
+        # Execute the appropriate primitive
+        success = False
+        
+        if msg.primitive_type == 'arm':
+            self.current_topic_primitive = self.arm_primitive
+            # For arm: check if altitude > 0 means arm, else disarm
+            arm_value = True  # Default to arm
+            success = self.arm_primitive.execute(arm=arm_value, force=False, timeout=10.0)
+            
+        elif msg.primitive_type == 'disarm':
+            self.current_topic_primitive = self.arm_primitive
+            success = self.arm_primitive.execute(arm=False, force=False, timeout=10.0)
+            
+        elif msg.primitive_type == 'takeoff':
+            self.current_topic_primitive = self.takeoff_primitive
+            # Use target_position.z as altitude, climb_rate from message
+            target_altitude = msg.target_position.z if msg.target_position.z > 0 else 10.0
+            climb_rate = msg.climb_rate if msg.climb_rate > 0 else 1.0
+            success = self.takeoff_primitive.execute(target_altitude=target_altitude, climb_rate=climb_rate, timeout=msg.timeout if msg.timeout > 0 else 30.0)
+            
+        elif msg.primitive_type == 'goto':
+            self.current_topic_primitive = self.goto_primitive
+            # Use target_position directly
+            success = self.goto_primitive.execute(target=msg.target_position, timeout=msg.timeout if msg.timeout > 0 else 60.0)
+                
+        elif msg.primitive_type == 'land':
+            self.current_topic_primitive = self.land_primitive
+            success = self.land_primitive.execute(timeout=msg.timeout if msg.timeout > 0 else 30.0)
+            
+        else:
+            self.get_logger().error(f"Unknown primitive type: {msg.primitive_type}")
+        
+        # Publish initial status
+        status_msg = PrimitiveStatus()
+        status_msg.command_id = msg.command_id
+        status_msg.progress = 0.0
+        
+        if success:
+            status_msg.status = 'executing'
+            status_msg.error_message = f'Started {msg.primitive_type} primitive'
+            self.get_logger().info(f"Primitive {msg.command_id} started successfully")
+        else:
+            status_msg.status = 'failed'
+            status_msg.error_message = f'Failed to start {msg.primitive_type}: {self.current_topic_primitive.get_error_message() if self.current_topic_primitive else "Unknown error"}'
+            self.get_logger().error(f"Failed to start primitive {msg.command_id}: {status_msg.error_message}")
+            self.current_topic_primitive = None
+            self.current_primitive_id = None
+        
+        self.primitive_status_pub.publish(status_msg)
     
     def arm_disarm_callback_async(self, request, response):
         """Handle arm/disarm service requests with proper async handling."""
@@ -438,11 +580,11 @@ def main(args=None):
     """Main entry point for FAL node."""
     rclpy.init(args=args)
     
-    # Get drone namespace from command line or use default
-    import sys
-    drone_namespace = "/drone_0"
-    if len(sys.argv) > 1:
-        drone_namespace = sys.argv[1]
+    # Create a temporary node to declare and retrieve the parameter
+    temp_node = rclpy.create_node('fal_param_node')
+    temp_node.declare_parameter('drone_namespace', '/drone_0')
+    drone_namespace = temp_node.get_parameter('drone_namespace').value
+    temp_node.destroy_node()
     
     # Create and spin the FAL node
     fal_node = FALNode(drone_namespace=drone_namespace)

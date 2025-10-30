@@ -20,22 +20,20 @@ class HealthMonitor:
     Aggregates battery, GPS, and other health monitors.
     """
     
-    def __init__(self, node: Node, config: dict, namespace: str = ''):
+    def __init__(self, node: Node, battery_monitor, gps_monitor):
         """
         Initialize unified health monitor.
         
         Args:
             node: ROS2 node instance
-            config: Configuration dictionary
-            namespace: Drone namespace
+            battery_monitor: Already initialized BatteryMonitor instance
+            gps_monitor: Already initialized GPSMonitor instance
         """
         self.node = node
-        self.config = config
-        self.namespace = namespace
         
-        # Component monitors
-        self.battery_monitor = BatteryMonitor(node, config, namespace)
-        self.gps_monitor = GPSMonitor(node, config, namespace)
+        # Component monitors (use provided instances)
+        self.battery_monitor = battery_monitor
+        self.gps_monitor = gps_monitor
         
         # Overall health state
         self.overall_health = 'unknown'
@@ -47,8 +45,9 @@ class HealthMonitor:
         self.battery_monitor.register_critical_callback(self._on_battery_critical)
         self.gps_monitor.register_critical_callback(self._on_gps_critical)
         
-        # Publisher for overall health
-        health_topic = f'/{namespace}/tee/health/overall' if namespace else '/tee/health/overall'
+        # Publisher for overall health (use namespace from battery monitor)
+        namespace = self.battery_monitor.namespace
+        health_topic = f'{namespace}/tee/health/overall' if namespace else '/tee/health/overall'
         self.health_pub = self.node.create_publisher(
             HealthReport,
             health_topic,

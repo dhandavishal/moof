@@ -65,18 +65,43 @@ if ! command -v screen &> /dev/null; then
     exit 1
 fi
 
+# Array to store screen session names
+declare -a SCREEN_SESSIONS=()
+
 # Function to kill all SITL instances
 cleanup() {
     echo -e "\n${YELLOW}Cleaning up SITL instances...${NC}"
-    pkill -f sim_vehicle.py || true
-    for i in $(seq 0 $((NUM_DRONES - 1))); do
-        screen -S drone_${i}_sitl -X quit 2>/dev/null || true
+    
+    # Kill all screen sessions we created
+    for session in "${SCREEN_SESSIONS[@]}"; do
+        echo -e "${YELLOW}  Terminating screen session: $session${NC}"
+        screen -S "$session" -X quit 2>/dev/null || true
     done
+    
+    # Kill sim_vehicle.py processes
+    echo -e "${YELLOW}  Killing sim_vehicle.py processes...${NC}"
+    pkill -9 -f sim_vehicle.py 2>/dev/null || true
+    
+    # Kill actual SITL binaries (arducopter, arduplane, etc.)
+    echo -e "${YELLOW}  Killing SITL binaries...${NC}"
+    pkill -9 -f "ardu${VEHICLE_TYPE}" 2>/dev/null || true
+    pkill -9 -f "ardupilot" 2>/dev/null || true
+    
+    # Kill MAVProxy processes
+    echo -e "${YELLOW}  Killing MAVProxy processes...${NC}"
+    pkill -9 -f "mavproxy" 2>/dev/null || true
+    
+    # Additional cleanup for any orphaned processes
+    pkill -9 -f "JSBSim" 2>/dev/null || true
+    
+    # Wait a moment for processes to terminate
+    sleep 1
+    
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
 # Set up trap to cleanup on script exit
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM SIGTERM SIGINT
 
 # Kill any existing SITL instances before starting
 cleanup
@@ -128,8 +153,12 @@ EOF
     SIM_CMD+="--console "
     SIM_CMD+="--add-param-file=$PARAM_FILE "
     
-    # Launch in a detached screen session, keeping it alive with 'exec bash'
-    screen -dmS "$SESSION_NAME" bash -c "$SIM_CMD; exec bash"
+    # Launch in a detached screen session
+    # Note: We don't use 'exec bash' so the screen terminates when sim_vehicle exits
+    screen -dmS "$SESSION_NAME" bash -c "$SIM_CMD"
+    
+    # Add session to our tracking array
+    SCREEN_SESSIONS+=("$SESSION_NAME")
     
     echo -e "  ${GREEN}✓ Launched${NC}"
     echo ""
@@ -154,7 +183,12 @@ for i in $(seq 0 $((NUM_DRONES - 1))); do
 done
 echo ""
 echo -e "${GREEN}Press Ctrl+C to stop all SITL instances.${NC}"
+echo ""
+echo -e "${YELLOW}Monitoring SITL processes...${NC}"
+echo -e "${YELLOW}(Script will automatically clean up all processes on exit)${NC}"
 
 # Keep script running to hold the trap active
-# This will wait indefinitely until it's interrupted (e.g., by Ctrl+C)
-tail -f /dev/null
+# Use a sleep loop instead of wait since screen sessions aren't child processes
+while true; do
+    sleep 1
+done
