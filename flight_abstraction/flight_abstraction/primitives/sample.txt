@@ -1,0 +1,69 @@
+def update_callback(self):
+    """Called at 20 Hz to update all executing primitives"""
+    
+    if self.arm_primitive.get_state() == PrimitiveState.EXECUTING:
+        self.arm_primitive.update()
+    
+    if self.takeoff_primitive.get_state() == PrimitiveState.EXECUTING:
+        self.takeoff_primitive.update()
+    
+    if self.goto_primitive.get_state() == PrimitiveState.EXECUTING:
+        self.goto_primitive.update()
+    
+    if self.land_primitive.get_state() == PrimitiveState.EXECUTING:
+        self.land_primitive.update()
+```
+
+**Why separate update timer?**
+- **Decouples** primitive state updates from action feedback
+- **Consistent** update rate regardless of action client behavior
+- **Shared** timer reduces overhead
+- **Thread-safe** with ReentrantCallbackGroup
+
+---
+
+## 🔄 **Execution Flow Example: Takeoff**
+
+Let's trace a complete takeoff operation:
+```
+1. User/Client sends goal:
+   ros2 action send_goal /drone_0/takeoff multi_drone_msgs/action/Takeoff \
+     "{target_altitude: 10.0, climb_rate: 1.0}"
+
+2. FAL Node receives goal:
+   → takeoff_execute_callback() invoked
+   
+3. Execute primitive:
+   → takeoff_primitive.execute(target_altitude=10.0)
+   → Validates parameters
+   → Checks armed state (MUST be armed)
+   → Calls /drone_0/mavros/set_mode (GUIDED)
+   → Calls /drone_0/mavros/cmd/takeoff (altitude=10.0)
+   → Sets state to EXECUTING
+   → Returns True
+
+4. Monitor loop starts (10 Hz):
+   Iteration 1 (t=0.1s):
+   → takeoff_primitive.update() called
+     → Reads altitude from local_pos_sub
+     → current_altitude = 0.2m
+     → progress = (0.2 - 0.0) / 10.0 * 100 = 2%
+   → Publishes feedback: altitude=0.2m, progress=2%
+   
+   Iteration 5 (t=0.5s):
+   → update() called
+     → current_altitude = 1.5m
+     → progress = 15%
+   → Publishes feedback: altitude=1.5m, progress=15%
+   
+   ... (continues) ...
+   
+   Iteration 100 (t=10.0s):
+   → update() called
+     → current_altitude = 9.8m
+     → |9.8 - 10.0| = 0.2m < 0.5m (acceptance radius)
+     → Sets state to SUCCESS
+   → goal_handle.succeed()
+   → Returns result: success=True, final_altitude=9.8m
+
+5. Action completes, client receives result

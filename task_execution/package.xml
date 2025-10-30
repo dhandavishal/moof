@@ -3,12 +3,21 @@
 <package format="3">
   <name>task_execution</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Task Execution Engine for multi-drone coordination</description>
   <maintainer email="dhandavishal@yahoo.co.in">dhandavishal</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>multi_drone_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  
+  <!-- Python dependencies for executors and core -->
+  <exec_depend>python3-shapely</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-networkx</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

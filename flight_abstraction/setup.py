@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'fal_node = flight_abstraction.fal_node:main',
+            'primitive_command_handler = flight_abstraction.primitive_command_handler:main',
             'test_single_drone = flight_abstraction.test_single_drone:main',
         ],
     },
