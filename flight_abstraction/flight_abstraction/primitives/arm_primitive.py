@@ -174,8 +174,25 @@ class ArmPrimitive(BasePrimitive):
                     self.set_error(f"Arm command rejected: {response.result}")
                     return False
             else:
-                self.set_error("Arm service call timed out")
-                return False
+                # Service timed out - but command may have been received!
+                # This happens due to MAVROS future_error bug
+                self.logger.warn("Arm service call timed out, but command may have been sent")
+                self.logger.warn("Will check actual armed state to verify...")
+                
+                # Give ArduPilot time to process the command
+                time.sleep(0.5)
+                
+                # Check if state changed despite timeout
+                if self.current_state and self.current_state.armed == arm:
+                    self.logger.info(f"Command succeeded despite timeout! Armed state is now: {arm}")
+                    self.state = PrimitiveState.SUCCESS
+                    return True
+                else:
+                    # Start executing and let update() check for state change
+                    self.logger.info("State not changed yet, will monitor in update()")
+                    self.state = PrimitiveState.EXECUTING
+                    self.command_sent_time = time.time()
+                    return True
                 
         except Exception as e:
             self.set_error(f"Exception during arm command: {str(e)}")

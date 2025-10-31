@@ -173,8 +173,19 @@ class TakeoffPrimitive(BasePrimitive):
                     self.set_error(f"Takeoff command rejected: {response.result}")
                     return False
             else:
-                self.set_error("Takeoff service call timed out")
-                return False
+                # MAVROS bug workaround: service timeout but command might have been sent
+                self.logger.warn("Takeoff service timed out, checking if altitude is increasing...")
+                time.sleep(1.0)  # Wait a moment for takeoff to start
+                
+                # Check if altitude is increasing (indicating takeoff started)
+                if self.current_altitude > (self.initial_altitude + 0.5):
+                    self.logger.info("Takeoff detected despite service timeout (MAVROS bug workaround)")
+                    self.state = PrimitiveState.EXECUTING
+                    self.command_sent_time = time.time()
+                    return True
+                else:
+                    self.set_error("Takeoff service call timed out and no altitude change detected")
+                    return False
                 
         except Exception as e:
             self.set_error(f"Exception during takeoff command: {str(e)}")

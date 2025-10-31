@@ -70,14 +70,7 @@ class TaskExecutionEngineNode(Node):
         # Drone namespace
         self.drone_namespace = '/drone_0'  # TODO: Make configurable
         
-        # Publisher for primitive commands (TEE -> FAL)
-        self.primitive_pub = self.create_publisher(
-            PrimitiveCommand,
-            '/tee/primitive_command',
-            100
-        )
-        
-        # FAL Action Clients - for direct action-based communication
+        # FAL Action Clients - for action-based communication
         self.get_logger().info(f"Creating FAL action clients for {self.drone_namespace}")
         
         self.arm_client = self.create_client(
@@ -125,8 +118,6 @@ class TaskExecutionEngineNode(Node):
         # Execution state
         self.current_primitives: List[PrimitiveCommand] = []
         self.primitive_index = 0
-        self.waiting_for_primitive = False
-        self.current_primitive_id: Optional[str] = None
         
         # Thread safety
         self.execution_lock = Lock()
@@ -227,15 +218,6 @@ class TaskExecutionEngineNode(Node):
             callback_group=self.callback_group
         )
         
-        # Subscriber for primitive status from FAL
-        self.primitive_status_sub = self.create_subscription(
-            PrimitiveStatus,
-            '/fal/primitive_status',
-            self._primitive_status_callback,
-            10,
-            callback_group=self.callback_group
-        )
-        
         # Publishers (outputs to Squadron Manager)
         self.status_pub = self.create_publisher(
             String,
@@ -274,20 +256,6 @@ class TaskExecutionEngineNode(Node):
             MissionState.EXECUTING,
             self._on_exit_executing
         )
-    
-    # ============================================================================
-    # Primitive Sending
-    # ============================================================================
-    
-    def send_primitive(self, primitive: PrimitiveCommand):
-        """
-        Send primitive command to FAL.
-        
-        Args:
-            primitive: PrimitiveCommand to execute
-        """
-        self.primitive_pub.publish(primitive)
-        self.get_logger().debug(f"Sent primitive: {primitive.command_id} ({primitive.primitive_type})")
     
     # ============================================================================
     # ROS Callbacks
@@ -374,43 +342,6 @@ class TaskExecutionEngineNode(Node):
                 MissionState.ABORTED,
                 reason="User requested abort"
             )
-    
-    def _primitive_status_callback(self, msg: PrimitiveStatus):
-        """
-        Handle primitive status updates from FAL.
-        
-        Args:
-            msg: PrimitiveStatus message
-        """
-        # Check if this is for our current primitive
-        if msg.command_id != self.current_primitive_id:
-            return
-        
-        self.get_logger().debug(
-            f"Primitive {msg.command_id} status: {msg.status} ({msg.progress*100:.1f}%)"
-        )
-        
-        # Update progress monitor
-        if self.state_machine.is_state(MissionState.EXECUTING):
-            self.progress_monitor.update_primitive_progress(msg.progress)
-        
-        # Handle completion
-        if msg.status == 'completed':
-            self.get_logger().info(f"Primitive {self.primitive_index} completed")
-            self.waiting_for_primitive = False
-            self.current_primitive_id = None
-        
-        # Handle failure
-        elif msg.status == 'failed':
-            self.get_logger().error(
-                f"Primitive {self.primitive_index} failed: {msg.error_message}"
-            )
-            self._handle_primitive_failure(msg.error_message)
-        
-        # Handle timeout
-        elif msg.status == 'timeout':
-            self.get_logger().error(f"Primitive {self.primitive_index} timed out")
-            self._handle_primitive_failure("Primitive execution timeout")
     
     # ============================================================================
     # State Machine Callbacks
@@ -510,9 +441,9 @@ class TaskExecutionEngineNode(Node):
         task = self.task_queue.get_next_task()
         
         if not task:
-            # No tasks available, return to idle
+            # No tasks available, abort validation
             self.state_machine.transition_to(
-                MissionState.IDLE,
+                MissionState.ABORTED,
                 reason="No tasks available"
             )
             return
@@ -520,8 +451,8 @@ class TaskExecutionEngineNode(Node):
         self.get_logger().info(f"Validating task {task.task_id}")
         
         # Get current monitor statuses
-        battery_status = self.battery_monitor.get_status()
-        gps_status = self.gps_monitor.get_status()
+        battery_status = self.battery_monitor.get_current_status()
+        gps_status = self.gps_monitor.get_current_status()
         
         # Validate task
         validation_result = self.validator.validate_task(
@@ -543,9 +474,9 @@ class TaskExecutionEngineNode(Node):
                 reason=f"Validation failed: {validation_result.failures[0].message}"
             )
             
-            # Return to idle
+            # Abort mission
             self.state_machine.transition_to(
-                MissionState.IDLE,
+                MissionState.ABORTED,
                 reason="Task validation failed"
             )
             return
@@ -555,22 +486,54 @@ class TaskExecutionEngineNode(Node):
             for warning in validation_result.warnings:
                 self.get_logger().warn(f"Validation warning: {warning.message}")
         
-        # Validation passed - generate primitives
-        self.get_logger().info(f"Task {task.task_id} validation passed")
+        # Validation passed - generate full primitive sequence
+        self.get_logger().info(f"Task {task.task_id} validation passed. Generating primitive sequence.")
         
         try:
             executor = self.executors.get(task.task_type)
             if not executor:
                 raise ValueError(f"No executor for task type: {task.task_type}")
             
-            # Generate primitive sequence
-            self.current_primitives = executor.execute(task.parameters)
+            # 1. Generate the mission-specific primitives (e.g., Goto commands)
+            mission_primitives = executor.execute(task.parameters)
+            
+            # 2. Create the full sequence: Arm -> Takeoff -> Mission -> Land
+            self.current_primitives = []
+            
+            # ARM
+            arm_cmd = PrimitiveCommand()
+            arm_cmd.primitive_type = "arm"
+            arm_cmd.command_id = f"{task.task_id}_arm"
+            self.current_primitives.append(arm_cmd)
+            
+            # TAKEOFF (Use a default altitude from config)
+            takeoff_alt = self.config.get('safety', {}).get('rtl_altitude', 10.0)
+            takeoff_cmd = PrimitiveCommand()
+            takeoff_cmd.primitive_type = "takeoff"
+            takeoff_cmd.command_id = f"{task.task_id}_takeoff"
+            takeoff_cmd.target_position.z = float(takeoff_alt)
+            self.current_primitives.append(takeoff_cmd)
+            
+            # MISSION
+            self.current_primitives.extend(mission_primitives)
+            
+            # LAND
+            land_cmd = PrimitiveCommand()
+            land_cmd.primitive_type = "land"
+            land_cmd.command_id = f"{task.task_id}_land"
+            self.current_primitives.append(land_cmd)
+            
             self.primitive_index = 0
             
-            self.get_logger().info(f"Generated {len(self.current_primitives)} primitives")
+            self.get_logger().info(f"Generated {len(self.current_primitives)} total primitives (Arm, Takeoff, {len(mission_primitives)} mission, Land)")
             
             # Start progress tracking
-            self.progress_monitor.start_mission(len(self.current_primitives))
+            self.progress_monitor.start_mission(
+                task_id=task.task_id,
+                task_type=task.task_type,
+                task_parameters=task.parameters,
+                total_primitives=len(self.current_primitives)
+            )
             
             # Transition to executing
             self.state_machine.transition_to(
@@ -582,18 +545,20 @@ class TaskExecutionEngineNode(Node):
             self.get_logger().error(f"Failed to generate primitives: {e}")
             self.task_queue.mark_failed(task.task_id, reason=str(e))
             self.state_machine.transition_to(
-                MissionState.IDLE,
+                MissionState.ABORTED,
                 reason="Primitive generation failed"
             )
     
     def _handle_executing_state(self):
-        """Handle EXECUTING state - execute primitives"""
+        """Handle EXECUTING state - execute primitives using action clients"""
         
-        with self.execution_lock:
-            # Check if waiting for primitive to complete
-            if self.waiting_for_primitive:
-                return
-            
+        # This lock prevents the 20Hz timer from trying to run a new
+        # primitive while the last one is still blocking/executing.
+        if not self.execution_lock.acquire(blocking=False):
+            # Last primitive is still running, wait for it to finish.
+            return
+        
+        try:
             # Check if all primitives completed
             if self.primitive_index >= len(self.current_primitives):
                 self.get_logger().info("All primitives executed successfully")
@@ -608,18 +573,176 @@ class TaskExecutionEngineNode(Node):
             
             self.get_logger().info(
                 f"Executing primitive {self.primitive_index + 1}/{len(self.current_primitives)}: "
-                f"{primitive.primitive_type}"
+                f"{primitive.primitive_type.upper()}"
             )
             
-            # Send primitive to FAL
-            self.send_primitive(primitive)
+            # Execute the primitive and BLOCK until it's done
+            # This call is safe because it's waiting for a *different node* (FAL)
+            success = self._execute_primitive_blocking(primitive)
             
-            # Track current primitive
-            self.current_primitive_id = primitive.command_id
-            self.waiting_for_primitive = True
-            
-            # Increment index for next iteration
-            self.primitive_index += 1
+            if success:
+                self.get_logger().info(f"Primitive {primitive.primitive_type.upper()} completed successfully.")
+                self.primitive_index += 1
+                self.progress_monitor.update_primitive_progress(
+                    float(self.primitive_index) / len(self.current_primitives)
+                )
+            else:
+                self.get_logger().error(f"Primitive {primitive.primitive_type.upper()} failed.")
+                self._handle_primitive_failure(f"Primitive {primitive.primitive_type} failed")
+        
+        except Exception as e:
+            self.get_logger().error(f"Exception in execution state: {e}")
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+            self._handle_primitive_failure(str(e))
+        
+        finally:
+            self.execution_lock.release()
+    
+    # ============================================================================
+    # Primitive Execution (Action-Based)
+    # ============================================================================
+    
+    def _execute_primitive_blocking(self, primitive: PrimitiveCommand) -> bool:
+        """
+        Selects and runs the correct blocking executor for a primitive.
+        Returns True on success, False on failure.
+        """
+        
+        primitive_type = primitive.primitive_type.lower()
+        
+        if primitive_type == "arm":
+            return self._execute_arm(primitive)
+        elif primitive_type == "takeoff":
+            return self._execute_takeoff(primitive)
+        elif primitive_type == "goto":
+            return self._execute_goto(primitive)
+        elif primitive_type == "land":
+            return self._execute_land(primitive)
+        else:
+            self.get_logger().error(f"Unknown primitive type: {primitive_type}")
+            return False
+    
+    def _execute_arm(self, primitive: PrimitiveCommand) -> bool:
+        """Executes the ARM service and blocks until complete."""
+        if not self.arm_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Arm service not available")
+            return False
+        
+        req = ArmDisarm.Request()
+        req.arm = True
+        req.force = False
+        
+        future = self.arm_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
+        
+        if not future.done() or future.result() is None:
+            self.get_logger().error("Arm service call timed out")
+            return False
+        
+        return future.result().success
+    
+    def _execute_takeoff(self, primitive: PrimitiveCommand) -> bool:
+        """Executes the TAKEOFF action and blocks until complete."""
+        if not self.takeoff_action_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Takeoff action server not available")
+            return False
+        
+        goal = Takeoff.Goal()
+        goal.target_altitude = float(primitive.target_position.z)
+        
+        # Send goal
+        goal_future = self.takeoff_action_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
+        
+        if not goal_future.done() or goal_future.result() is None:
+            self.get_logger().error("Takeoff goal send timed out")
+            return False
+        
+        goal_handle = goal_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            self.get_logger().error("Takeoff goal rejected")
+            return False
+        
+        # Wait for result
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
+        
+        if not result_future.done() or result_future.result() is None:
+            self.get_logger().error("Takeoff action timed out")
+            return False
+        
+        return result_future.result().result.success
+    
+    def _execute_goto(self, primitive: PrimitiveCommand) -> bool:
+        """Executes the GOTO action and blocks until complete."""
+        if not self.goto_action_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Goto action server not available")
+            return False
+        
+        goal = GoToWaypoint.Goal()
+        goal.target_position = primitive.target_position
+        goal.target_orientation = primitive.target_orientation
+        goal.velocity = primitive.velocity if primitive.velocity > 0 else 2.0
+        goal.acceptance_radius = primitive.acceptance_radius if primitive.acceptance_radius > 0 else 1.0
+        
+        # Send goal
+        goal_future = self.goto_action_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
+        
+        if not goal_future.done() or goal_future.result() is None:
+            self.get_logger().error("Goto goal send timed out")
+            return False
+        
+        goal_handle = goal_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            self.get_logger().error("Goto goal rejected")
+            return False
+        
+        # Wait for result
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)  # Longer timeout for travel
+        
+        if not result_future.done() or result_future.result() is None:
+            self.get_logger().error("Goto action timed out")
+            return False
+        
+        return result_future.result().result.success
+    
+    def _execute_land(self, primitive: PrimitiveCommand) -> bool:
+        """Executes the LAND action and blocks until complete."""
+        if not self.land_action_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Land action server not available")
+            return False
+        
+        goal = Land.Goal()
+        
+        # Send goal
+        goal_future = self.land_action_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
+        
+        if not goal_future.done() or goal_future.result() is None:
+            self.get_logger().error("Land goal send timed out")
+            return False
+        
+        goal_handle = goal_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            self.get_logger().error("Land goal rejected")
+            return False
+        
+        # Wait for result
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)  # Longer timeout for landing
+        
+        if not result_future.done() or result_future.result() is None:
+            self.get_logger().error("Land action timed out")
+            return False
+        
+        return result_future.result().result.success
+    
+    # ============================================================================
+    # State Handlers (Continued)
+    # ============================================================================
     
     def _handle_paused_state(self):
         """Handle PAUSED state - hold position"""
@@ -628,8 +751,30 @@ class TaskExecutionEngineNode(Node):
     
     def _handle_emergency_state(self):
         """Handle EMERGENCY state - execute emergency procedures"""
-        # Emergency RTL should be injected by _trigger_emergency()
-        pass
+        if not self.execution_lock.acquire(blocking=False):
+            # Emergency landing is already in progress
+            return
+        
+        try:
+            self.get_logger().critical("EXECUTING EMERGENCY LAND")
+            
+            # Create an emergency land primitive
+            land_primitive = PrimitiveCommand()
+            land_primitive.primitive_type = "land"
+            land_primitive.command_id = "emergency_land"
+            
+            # Execute it
+            success = self._execute_land(land_primitive)
+            
+            if success:
+                self.get_logger().info("Emergency land successful.")
+                self.state_machine.transition_to(MissionState.ABORTED, reason="Emergency land complete")
+            else:
+                self.get_logger().critical("EMERGENCY LAND FAILED. DRONE IS IN AN UNSTABLE STATE.")
+                # We are stuck in emergency state, which is appropriate.
+        
+        finally:
+            self.execution_lock.release()
     
     def _handle_completed_state(self):
         """Handle COMPLETED state - clean up and return to idle"""
@@ -747,7 +892,7 @@ class TaskExecutionEngineNode(Node):
             status['mission_id'] = self.task_queue.active_task.task_id
             
             # Add progress
-            progress = self.progress_monitor.get_progress()
+            progress = self.progress_monitor.get_completion_percentage()
             status['progress'] = progress
         
         # Add health summary
