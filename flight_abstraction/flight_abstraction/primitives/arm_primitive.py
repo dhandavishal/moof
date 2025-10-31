@@ -179,20 +179,19 @@ class ArmPrimitive(BasePrimitive):
                 self.logger.warn("Arm service call timed out, but command may have been sent")
                 self.logger.warn("Will check actual armed state to verify...")
                 
-                # Give ArduPilot time to process the command
-                time.sleep(0.5)
+                # Give ArduPilot more time to process the command (check multiple times)
+                for i in range(6):  # Check for 3 seconds total
+                    time.sleep(0.5)
+                    if self.current_state and self.current_state.armed == arm:
+                        self.logger.info(f"Command succeeded despite timeout! Armed state is now: {arm} (after {(i+1)*0.5}s)")
+                        self.state = PrimitiveState.SUCCESS
+                        return True
                 
-                # Check if state changed despite timeout
-                if self.current_state and self.current_state.armed == arm:
-                    self.logger.info(f"Command succeeded despite timeout! Armed state is now: {arm}")
-                    self.state = PrimitiveState.SUCCESS
-                    return True
-                else:
-                    # Start executing and let update() check for state change
-                    self.logger.info("State not changed yet, will monitor in update()")
-                    self.state = PrimitiveState.EXECUTING
-                    self.command_sent_time = time.time()
-                    return True
+                # Still not armed after 3 seconds, start executing and let update() monitor
+                self.logger.info("State not changed after 3s, will monitor in update()")
+                self.state = PrimitiveState.EXECUTING
+                self.command_sent_time = time.time()
+                return True
                 
         except Exception as e:
             self.set_error(f"Exception during arm command: {str(e)}")

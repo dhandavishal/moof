@@ -5,6 +5,7 @@ Orchestrates mission execution from high-level commands to low-level primitives.
 """
 
 import json
+import time
 from typing import Optional, Dict, List
 from threading import Lock
 
@@ -368,7 +369,7 @@ class TaskExecutionEngineNode(Node):
             self.task_queue.mark_completed(self.task_queue.active_task.task_id)
         
         # Complete progress tracking
-        self.progress_monitor.complete()
+        self.progress_monitor.complete_mission()
     
     def _on_exit_executing(self):
         """Called when exiting EXECUTING state"""
@@ -583,9 +584,7 @@ class TaskExecutionEngineNode(Node):
             if success:
                 self.get_logger().info(f"Primitive {primitive.primitive_type.upper()} completed successfully.")
                 self.primitive_index += 1
-                self.progress_monitor.update_primitive_progress(
-                    float(self.primitive_index) / len(self.current_primitives)
-                )
+                self.progress_monitor.update_primitive_completed(self.primitive_index - 1)
             else:
                 self.get_logger().error(f"Primitive {primitive.primitive_type.upper()} failed.")
                 self._handle_primitive_failure(f"Primitive {primitive.primitive_type} failed")
@@ -634,10 +633,19 @@ class TaskExecutionEngineNode(Node):
         req.force = False
         
         future = self.arm_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
         
-        if not future.done() or future.result() is None:
-            self.get_logger().error("Arm service call timed out")
+        # Poll the future without blocking the node
+        timeout = 15.0
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not future.done():
+            time.sleep(0.05)  # 50ms polling
+            elapsed = self.get_clock().now().nanoseconds / 1e9 - start_time
+            if elapsed > timeout:
+                self.get_logger().error("Arm service call timed out")
+                return False
+        
+        if future.result() is None:
+            self.get_logger().error("Arm service returned None")
             return False
         
         return future.result().success
@@ -653,11 +661,14 @@ class TaskExecutionEngineNode(Node):
         
         # Send goal
         goal_future = self.takeoff_action_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
         
-        if not goal_future.done() or goal_future.result() is None:
-            self.get_logger().error("Takeoff goal send timed out")
-            return False
+        # Poll without blocking
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not goal_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 10.0:
+                self.get_logger().error("Takeoff goal send timed out")
+                return False
         
         goal_handle = goal_future.result()
         if not goal_handle or not goal_handle.accepted:
@@ -666,11 +677,12 @@ class TaskExecutionEngineNode(Node):
         
         # Wait for result
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
-        
-        if not result_future.done() or result_future.result() is None:
-            self.get_logger().error("Takeoff action timed out")
-            return False
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not result_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 60.0:
+                self.get_logger().error("Takeoff action timed out")
+                return False
         
         return result_future.result().result.success
     
@@ -682,17 +694,18 @@ class TaskExecutionEngineNode(Node):
         
         goal = GoToWaypoint.Goal()
         goal.target_position = primitive.target_position
-        goal.target_orientation = primitive.target_orientation
-        goal.velocity = primitive.velocity if primitive.velocity > 0 else 2.0
+        goal.target_heading = -1.0  # -1 = don't change heading
+        goal.max_speed = primitive.velocity if primitive.velocity > 0 else 2.0
         goal.acceptance_radius = primitive.acceptance_radius if primitive.acceptance_radius > 0 else 1.0
         
         # Send goal
         goal_future = self.goto_action_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
-        
-        if not goal_future.done() or goal_future.result() is None:
-            self.get_logger().error("Goto goal send timed out")
-            return False
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not goal_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 10.0:
+                self.get_logger().error("Goto goal send timed out")
+                return False
         
         goal_handle = goal_future.result()
         if not goal_handle or not goal_handle.accepted:
@@ -701,11 +714,12 @@ class TaskExecutionEngineNode(Node):
         
         # Wait for result
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)  # Longer timeout for travel
-        
-        if not result_future.done() or result_future.result() is None:
-            self.get_logger().error("Goto action timed out")
-            return False
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not result_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 120.0:
+                self.get_logger().error("Goto action timed out")
+                return False
         
         return result_future.result().result.success
     
@@ -716,14 +730,16 @@ class TaskExecutionEngineNode(Node):
             return False
         
         goal = Land.Goal()
+        goal.descent_rate = 0.5  # Default descent rate of 0.5 m/s
         
         # Send goal
         goal_future = self.land_action_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
-        
-        if not goal_future.done() or goal_future.result() is None:
-            self.get_logger().error("Land goal send timed out")
-            return False
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not goal_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 10.0:
+                self.get_logger().error("Land goal send timed out")
+                return False
         
         goal_handle = goal_future.result()
         if not goal_handle or not goal_handle.accepted:
@@ -732,11 +748,12 @@ class TaskExecutionEngineNode(Node):
         
         # Wait for result
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)  # Longer timeout for landing
-        
-        if not result_future.done() or result_future.result() is None:
-            self.get_logger().error("Land action timed out")
-            return False
+        start_time = self.get_clock().now().nanoseconds / 1e9
+        while not result_future.done():
+            time.sleep(0.05)
+            if (self.get_clock().now().nanoseconds / 1e9 - start_time) > 120.0:
+                self.get_logger().error("Land action timed out")
+                return False
         
         return result_future.result().result.success
     
