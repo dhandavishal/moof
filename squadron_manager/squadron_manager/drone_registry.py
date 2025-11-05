@@ -230,6 +230,9 @@ class DroneRegistry:
         if drone is None:
             return False
         
+        old_state = drone.state
+        old_connected = drone.connected
+        
         drone.connected = connected
         drone.armed = armed
         drone.mode = mode
@@ -244,6 +247,15 @@ class DroneRegistry:
                 drone.state = DroneState.AVAILABLE
             else:
                 drone.state = DroneState.BUSY
+        
+        # Log state transitions
+        if old_state != drone.state or old_connected != drone.connected:
+            self.logger.info(
+                f"Drone {drone_id} updated: "
+                f"connected={old_connected}->{connected}, "
+                f"state={old_state.name}->{drone.state.name}, "
+                f"armed={armed}, mode={mode}"
+            )
         
         return True
     

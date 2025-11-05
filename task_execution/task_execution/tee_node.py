@@ -248,6 +248,11 @@ class TaskExecutionEngineNode(Node):
         )
         
         self.state_machine.register_entry_callback(
+            MissionState.ABORTED,
+            self._on_enter_aborted
+        )
+        
+        self.state_machine.register_entry_callback(
             MissionState.COMPLETED,
             self._on_enter_completed
         )
@@ -360,11 +365,53 @@ class TaskExecutionEngineNode(Node):
         """Called when entering EMERGENCY state"""
         self.get_logger().error("Entering EMERGENCY state")
     
+    def _on_enter_aborted(self):
+        """Called when entering ABORTED state"""
+        self.get_logger().warn("Entering ABORTED state")
+        
+        # Publish final status BEFORE clearing active_task
+        if self.task_queue.active_task:
+            abort_status = {
+                'state': 'aborted',
+                'mission_id': self.task_queue.active_task.task_id,
+                'progress': self.progress_monitor.get_completion_percentage(),
+                'health': self.health_monitor.get_overall_health(),
+                'error': 'Mission aborted',
+                'timestamp': self.get_clock().now().nanoseconds / 1e9
+            }
+            msg = String()
+            msg.data = json.dumps(abort_status)
+            self.status_pub.publish(msg)
+            
+            self.get_logger().warn(
+                f"Published abort status for mission: "
+                f"{self.task_queue.active_task.task_id}"
+            )
+    
     def _on_enter_completed(self):
         """Called when entering COMPLETED state"""
         self.get_logger().info("Entering COMPLETED state")
         
-        # Mark task as completed
+        # Publish final status BEFORE clearing active_task
+        # This ensures Squadron Manager receives the completion notification
+        if self.task_queue.active_task:
+            completion_status = {
+                'state': 'completed',
+                'mission_id': self.task_queue.active_task.task_id,
+                'progress': 100.0,
+                'health': self.health_monitor.get_overall_health(),
+                'timestamp': self.get_clock().now().nanoseconds / 1e9
+            }
+            msg = String()
+            msg.data = json.dumps(completion_status)
+            self.status_pub.publish(msg)
+            
+            self.get_logger().info(
+                f"Published completion status for mission: "
+                f"{self.task_queue.active_task.task_id}"
+            )
+        
+        # Mark task as completed (this clears active_task)
         if self.task_queue.active_task:
             self.task_queue.mark_completed(self.task_queue.active_task.task_id)
         

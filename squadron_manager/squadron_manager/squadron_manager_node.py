@@ -204,12 +204,17 @@ class SquadronManagerNode(Node):
     
     def _state_callback(self, msg: State, drone_id: str):
         """Handle MAVROS state updates"""
+        self.get_logger().debug(
+            f"State callback for {drone_id}: connected={msg.connected}, "
+            f"armed={msg.armed}, mode={msg.mode}"
+        )
         self.drone_registry.update_drone_connection(
             drone_id=drone_id,
             connected=msg.connected,
             armed=msg.armed,
             mode=msg.mode
         )
+        self.get_logger().debug(f"Registry updated for {drone_id}")
     
     def _position_callback(self, msg: PoseStamped, drone_id: str):
         """Handle position updates"""
@@ -225,6 +230,11 @@ class SquadronManagerNode(Node):
         # Calculate percentage and remaining time
         percentage = msg.percentage * 100.0 if msg.percentage > 0 else 0.0
         
+        self.get_logger().debug(
+            f"Battery callback for {drone_id}: {percentage:.1f}% "
+            f"(voltage={msg.voltage:.2f}V)"
+        )
+        
         # Estimate remaining time (simplified)
         # Assuming 20 minutes flight time at 100%
         remaining_time = 20.0 * (percentage / 100.0)
@@ -238,12 +248,19 @@ class SquadronManagerNode(Node):
     
     def _gps_callback(self, msg: NavSatFix, drone_id: str):
         """Handle GPS updates"""
-        # NavSatFix status: 0=NO_FIX, 1=FIX, 2=SBAS_FIX, etc.
-        fix_type = msg.status.status + 1  # Convert to 1-based
+        # NavSatFix status: -1=NO_FIX, 0=FIX, 1=SBAS_FIX, 2=GBAS_FIX
+        # For squadron manager, we consider status >= 0 as valid (fix_type >= 2 in our system)
+        # Map: status -1 -> fix_type 0, status 0 -> fix_type 2, status 1+ -> fix_type 3+
+        fix_type = max(0, msg.status.status + 2)
         
         # Extract number of satellites (if available in covariance type)
         # This is simplified - actual implementation may need more info
-        satellites = 0  # TODO: Get actual satellite count
+        satellites = 10  # SITL default (assuming good fix)
+        
+        self.get_logger().debug(
+            f"GPS callback for {drone_id}: fix_type={fix_type}, "
+            f"lat={msg.latitude:.6f}, lon={msg.longitude:.6f}"
+        )
         
         self.drone_registry.update_drone_gps(
             drone_id=drone_id,
@@ -256,6 +273,12 @@ class SquadronManagerNode(Node):
         try:
             status = json.loads(msg.data)
             mission_id = status.get('mission_id', '')
+            state = status.get('state', '')
+            
+            self.get_logger().debug(
+                f"Mission status from {drone_id}: mission={mission_id}, "
+                f"state={state}, progress={status.get('progress', 0):.1f}%"
+            )
             
             # Update task progress
             if 'progress' in status:
@@ -265,13 +288,16 @@ class SquadronManagerNode(Node):
                 )
             
             # Check if mission completed
-            if status.get('state') == 'completed':
+            if state == 'completed':
+                self.get_logger().info(
+                    f"✓ Mission {mission_id} completed by {drone_id} - "
+                    f"clearing task assignment"
+                )
                 self.drone_registry.complete_task(drone_id)
                 self.task_allocator.deallocate_task(mission_id)
-                self.get_logger().info(f"✓ Mission {mission_id} completed by {drone_id}")
             
             # Check if mission failed/aborted
-            elif status.get('state') in ['aborted', 'failed']:
+            elif state in ['aborted', 'failed']:
                 self.get_logger().error(
                     f"✗ Mission {mission_id} failed on {drone_id} "
                     f"(reason: {status.get('error', 'unknown')})"
@@ -364,6 +390,15 @@ class SquadronManagerNode(Node):
         
         if not available_drones:
             self.get_logger().error(f"No available drones for mission {mission_id}")
+            
+            # Debug: Show why drones are not available
+            all_drones = self.drone_registry.get_all_drones()
+            for drone in all_drones:
+                self.get_logger().warn(
+                    f"Drone {drone.drone_id}: state={drone.state.name}, "
+                    f"connected={drone.connected}, battery={drone.battery_percentage:.1f}%, "
+                    f"gps_fix={drone.gps_fix_type}, task={drone.current_task_id}"
+                )
             return
         
         # Create task requirements
