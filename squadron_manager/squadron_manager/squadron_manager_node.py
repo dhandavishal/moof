@@ -43,6 +43,7 @@ class SquadronManagerNode(Node):
         self.declare_parameter('num_drones', 3)
         self.declare_parameter('allocation_strategy', 'nearest')
         self.declare_parameter('enable_formations', True)
+        self.declare_parameter('enable_task_reallocation', True)
         
         self.num_drones = self.get_parameter('num_drones').value
         strategy_str = self.get_parameter('allocation_strategy').value

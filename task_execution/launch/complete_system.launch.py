@@ -130,6 +130,7 @@ def generate_launch_description():
                 package='task_execution',
                 executable='tee_node',
                 name='task_execution_engine',
+                namespace=drone_namespace,  # CRITICAL: Add drone namespace!
                 output='screen',
                 parameters=[{
                     'config_path': tee_config_file,

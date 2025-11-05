@@ -189,7 +189,7 @@ class TaskExecutionEngineNode(Node):
         # Subscribers (inputs from Squadron Manager)
         self.mission_sub = self.create_subscription(
             String,
-            '/squadron/mission_command',
+            'tee/mission_command',  # Relative topic (respects namespace)
             self._mission_callback,
             10,
             callback_group=self.callback_group
@@ -197,7 +197,7 @@ class TaskExecutionEngineNode(Node):
         
         self.pause_sub = self.create_subscription(
             Empty,
-            '/squadron/pause',
+            'tee/pause',  # Relative topic (respects namespace)
             self._pause_callback,
             1,
             callback_group=self.callback_group
@@ -205,7 +205,7 @@ class TaskExecutionEngineNode(Node):
         
         self.resume_sub = self.create_subscription(
             Empty,
-            '/squadron/resume',
+            'tee/resume',  # Relative topic (respects namespace)
             self._resume_callback,
             1,
             callback_group=self.callback_group
@@ -213,7 +213,7 @@ class TaskExecutionEngineNode(Node):
         
         self.abort_sub = self.create_subscription(
             Empty,
-            '/squadron/abort',
+            'tee/abort',  # Relative topic (respects namespace)
             self._abort_callback,
             1,
             callback_group=self.callback_group
@@ -222,7 +222,7 @@ class TaskExecutionEngineNode(Node):
         # Publishers (outputs to Squadron Manager)
         self.status_pub = self.create_publisher(
             String,
-            '/tee/mission_status',
+            'tee/mission_status',  # Relative topic (respects namespace)
             10
         )
         
@@ -571,10 +571,10 @@ class TaskExecutionEngineNode(Node):
             land_cmd.command_id = f"{task.task_id}_land"
             self.current_primitives.append(land_cmd)
             
+            
             self.primitive_index = 0
-            
+
             self.get_logger().info(f"Generated {len(self.current_primitives)} total primitives (Arm, Takeoff, {len(mission_primitives)} mission, Land)")
-            
             # Start progress tracking
             self.progress_monitor.start_mission(
                 task_id=task.task_id,
