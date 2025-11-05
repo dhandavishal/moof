@@ -113,9 +113,10 @@ class ArmPrimitive(BasePrimitive):
             self.set_error("No state information received from MAVROS (is MAVROS running?)")
             return False
         
-        # If arming, set GUIDED mode first
-        if arm and not self.current_state.guided:
-            self.logger.info("Setting GUIDED mode before arming...")
+        # If arming, ALWAYS set GUIDED mode first (regardless of current state)
+        # This ensures we're not in LAND mode from a previous mission
+        if arm:
+            self.logger.info(f"Setting GUIDED mode before arming (current mode: {self.current_state.mode})...")
             mode_request = SetMode.Request()
             mode_request.custom_mode = "GUIDED"
             

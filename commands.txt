@@ -1,16 +1,30 @@
+# ==================================================
+# MOOFS COMPLETE SYSTEM - SINGLE DRONE
+# ==================================================
+
+# Build and source (run once after changes)
 cd ~/multi_drone_ws
-colcon build --packages-select flight_abstraction --symlink-install
+colcon build --packages-select task_execution squadron_manager --symlink-install
 source install/setup.bash
 
------------------------------------------------------------------
-
+# Terminal 1: Launch ArduPilot SITL
 cd ~/multi_drone_ws/src/moofs_3d/scripts
 ./launch_multi_sitl.sh 1
 
------------------------------------------------------------------
+# Terminal 2: Launch MOOFS System (MAVROS + FAL + TEE)
 cd ~/multi_drone_ws
 source install/setup.bash
-ros2 launch moofs_3d single_drone_test.launch.py drone_id:=0
+ros2 launch task_execution complete_system.launch.py drone_id:=0
+
+# OR use the simpler test_system.launch.py (hardcoded drone_0)
+ros2 launch task_execution test_system.launch.py
+
+# Terminal 3: Send test mission
+
+/home/dhandavishal/multi_drone_ws/scripts/test_mission.sh
+
+# Monitor mission status
+ros2 topic echo /tee/mission_status
 
 ------------------------------------------------------------------
 
@@ -18,9 +32,6 @@ source ~/ardupilot/bin/activate && cd ardupilot/ardupilot/Tools/autotest && ./si
 
 ------------------------------------------------------------------
 
-cd ~/multi_drone_ws
-source install/setup.bash
-ros2 run flight_abstraction test_single_drone --ros-args -p drone_id:=0
 
 -----------------------------------------------------------------
 

@@ -4,8 +4,11 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
 [![ArduPilot](https://img.shields.io/badge/ArduPilot-Compatible-orange.svg)](https://ardupilot.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-comprehensive-brightgreen.svg)](../docs/)
 
 **MOOFS** is a comprehensive, modular framework for autonomous drone mission execution built on ROS2. It provides a complete software stack for mission planning, validation, execution, and monitoring of software-defined drones.
+
+> **📚 NEW: [Comprehensive Documentation Available](../docs/)** - 1000+ pages covering architecture, implementation, ROS2 concepts, and operational workflows!
 
 ## 🚁 Overview
 
@@ -16,6 +19,20 @@ MOOFS implements a hierarchical architecture that separates high-level mission p
 - **Real-time validation**: Pre-flight checks for battery, GPS, safety constraints
 - **Health monitoring**: Continuous monitoring of drone health with emergency procedures
 - **Multi-drone ready**: Namespace-based architecture for fleet operations
+
+## 📖 Documentation
+
+**Complete documentation is now available** in the [`docs/`](../docs/) directory:
+
+- **[Documentation Hub](../docs/README.md)** - Start here
+- **[Quick Start Guide](../docs/QUICKSTART_SINGLE_DRONE.md)** - Get running in 10 minutes
+- **[Project Overview](../docs/01_PROJECT_OVERVIEW.md)** - Goals, features, and technology
+- **[System Architecture](../docs/02_SYSTEM_ARCHITECTURE.md)** - Complete architectural deep dive
+- **[ROS2 Fundamentals](../docs/03_ROS2_FUNDAMENTALS.md)** - ROS2 concepts in MOOFS
+- **[Task Execution Engine](../docs/04_TASK_EXECUTION_ENGINE.md)** - Mission orchestration
+- **[Mission Execution Flow](../docs/11_MISSION_EXECUTION_FLOW.md)** - Complete walkthrough
+
+See **[Table of Contents](../docs/00_TABLE_OF_CONTENTS.md)** for all 25+ documentation files.
 
 ## 🏗️ Architecture
 

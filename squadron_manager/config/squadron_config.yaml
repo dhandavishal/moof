@@ -1,0 +1,49 @@
+# Squadron Manager Configuration
+
+squadron_manager:
+  ros__parameters:
+    # Number of drones in squadron
+    num_drones: 3
+    
+    # Task allocation strategy
+    # Options: greedy, nearest, load_balanced, capability_based
+    allocation_strategy: 'nearest'
+    
+    # Enable formation control
+    enable_formations: true
+    
+    # Health monitoring
+    health_check_interval: 1.0  # seconds
+    heartbeat_timeout: 5.0  # seconds
+    
+    # Safety parameters
+    min_battery_threshold: 20.0  # percentage
+    min_gps_satellites: 6
+    min_gps_fix_type: 2  # 2D fix or better
+    
+    # Formation parameters
+    default_formation_type: 'line'
+    default_spacing: 10.0  # meters
+    default_altitude: 50.0  # meters
+    formation_tolerance: 2.0  # meters (acceptable deviation)
+    
+    # Task allocation parameters
+    task_timeout: 300.0  # seconds (5 minutes)
+    enable_task_reallocation: true
+    reallocation_threshold: 0.5  # reallocate if progress < 50% after timeout
+    
+    # Communication
+    status_publish_rate: 2.0  # Hz
+    
+    # Collision avoidance
+    min_separation_distance: 5.0  # meters
+    collision_check_enabled: true
+    
+    # Default drone capabilities
+    default_max_speed: 5.0  # m/s
+    default_max_altitude: 100.0  # meters
+    default_flight_time: 20.0  # minutes
+    default_payload_capacity: 0.5  # kg
+    default_has_camera: true
+    default_has_lidar: false
+    default_has_gripper: false

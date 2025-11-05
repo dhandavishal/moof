@@ -3,7 +3,8 @@
 Complete single-drone system launch file.
 
 Launches:
-- MAVROS (connects to ArduPilot SITL)
+- MAVROS (connects to ArduPilot SITL) using apm.launch
+- TF transform (map -> odom)
 - FAL (Flight Abstraction Layer)
 - TEE (Task Execution Engine)
 
@@ -12,10 +13,13 @@ Prerequisites:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, TimerAction, GroupAction, IncludeLaunchDescription
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from launch.launch_description_sources import AnyLaunchDescriptionSource
+from launch_ros.actions import Node, PushRosNamespace
 from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
@@ -52,29 +56,42 @@ def generate_launch_description():
     tgt_system = LaunchConfiguration('tgt_system')
     log_level = LaunchConfiguration('log_level')
     
-    # Drone namespace
-    drone_namespace = ['/drone_', drone_id]
+    # Drone namespace (using TextSubstitution for proper concatenation)
+    drone_namespace = [TextSubstitution(text='/drone_'), drone_id]
+    
+    # TF frame names
+    odom_frame = [TextSubstitution(text='drone_'), drone_id, TextSubstitution(text='/odom')]
+    
+    # Get MAVROS package directory
+    mavros_dir = get_package_share_directory('mavros')
     
     # ========================================================================
-    # MAVROS Node
+    # TF Transform: map -> odom (CRITICAL for navigation!)
     # ========================================================================
-    mavros_node = Node(
-        package='mavros',
-        executable='mavros_node',
-        name='mavros',
-        namespace=drone_namespace,
-        output='screen',
-        parameters=[{
-            'fcu_url': fcu_url,
-            'gcs_url': '',
-            'target_system_id': tgt_system,
-            'target_component_id': 1,
-            'fcu_protocol': 'v2.0',
-            'system_id': 255,
-            'component_id': 240,
-        }],
-        arguments=['--ros-args', '--log-level', log_level]
+    tf_map_to_odom = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='map_to_odom_static_broadcaster',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', odom_frame],
+        output='screen'
     )
+    
+    # ========================================================================
+    # MAVROS Node (using apm.launch for full plugin support)
+    # ========================================================================
+    mavros_group = GroupAction([
+        PushRosNamespace(drone_namespace),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(mavros_dir, 'launch', 'apm.launch')
+            ),
+            launch_arguments={
+                'fcu_url': fcu_url,
+                'tgt_system': tgt_system,
+                'tgt_component': '1',
+            }.items()
+        )
+    ])
     
     # ========================================================================
     # FAL Node (with delay to wait for MAVROS)
@@ -146,7 +163,8 @@ def generate_launch_description():
         log_level_arg,
         
         # Nodes (sequential startup)
-        mavros_node,      # Start immediately
+        tf_map_to_odom,   # Start TF transform immediately
+        mavros_group,     # Start MAVROS immediately (with all plugins)
         fal_node,         # Start after 3s
         tee_node,         # Start after 6s
         # status_monitor, # Uncomment to enable automatic status monitoring
