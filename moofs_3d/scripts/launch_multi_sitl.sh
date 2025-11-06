@@ -146,7 +146,7 @@ EOF
     SIM_CMD+="./sim_vehicle.py "
     SIM_CMD+="-v $VEHICLE_TYPE "
     SIM_CMD+="-I $INSTANCE "
-    SIM_CMD+="--out=127.0.0.1:$MAVPROXY_PORT "
+    #SIM_CMD+="--out=127.0.0.1:$MAVPROXY_PORT "
     SIM_CMD+="--out=127.0.0.1:$SITL_OUT_PORT "
     SIM_CMD+="--model + "
     SIM_CMD+="--speedup 1 "

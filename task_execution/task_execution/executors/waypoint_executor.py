@@ -74,7 +74,17 @@ class WaypointExecutor(BaseExecutor):
         for i, wp in enumerate(waypoints):
             # Extract position
             if isinstance(wp, dict):
-                position = self._extract_position(wp.get('position'))
+                # Check if waypoint has nested 'position' key or direct x,y,z keys
+                if 'position' in wp:
+                    # Format: {"position": {"x": ..., "y": ..., "z": ...}, "yaw": ...}
+                    position = self._extract_position(wp.get('position'))
+                elif 'x' in wp or 'y' in wp or 'z' in wp:
+                    # Format: {"x": ..., "y": ..., "z": ..., "yaw": ...}
+                    position = self._extract_position(wp)
+                else:
+                    self._log_error(f"Waypoint {i} missing position data: {wp}")
+                    continue
+                    
                 action = wp.get('action', None)
                 dwell_time = wp.get('dwell_time', 0.0)
                 yaw = wp.get('yaw', None)

@@ -294,8 +294,20 @@ class ProgressMonitor:
         if not SHAPELY_AVAILABLE or len(polygon_coords) < 3:
             return 0.0
         
-        # Extract x, y coordinates
-        coords_2d = [(p[0], p[1]) for p in polygon_coords]
+        # Extract x, y coordinates - handle both dict and list/tuple formats
+        coords_2d = []
+        for p in polygon_coords:
+            if isinstance(p, dict):
+                coords_2d.append((p.get('x', 0.0), p.get('y', 0.0)))
+            elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                coords_2d.append((p[0], p[1]))
+            else:
+                # Skip invalid points
+                continue
+        
+        if len(coords_2d) < 3:
+            return 0.0
+            
         polygon = Polygon(coords_2d)
         return polygon.area
     

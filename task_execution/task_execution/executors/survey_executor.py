@@ -277,8 +277,16 @@ class SurveyExecutor(BaseExecutor):
         if not area:
             return []
         
-        # Convert area to 2D points
-        area_2d = [(p[0], p[1]) for p in area]
+        # Convert area to 2D points - handle both dict and list/tuple formats
+        area_2d = []
+        for p in area:
+            if isinstance(p, dict):
+                area_2d.append((p.get('x', 0.0), p.get('y', 0.0)))
+            elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                area_2d.append((p[0], p[1]))
+            else:
+                self._log_error(f"Invalid area point format: {p}")
+                return []
         
         # Calculate bounds
         min_x = min(p[0] for p in area_2d)

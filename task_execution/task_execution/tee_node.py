@@ -120,6 +120,10 @@ class TaskExecutionEngineNode(Node):
         self.current_primitives: List[PrimitiveCommand] = []
         self.primitive_index = 0
         
+        # Mission cooldown (prevents MAVROS future/promise reuse issues)
+        self.last_mission_completion_time = None
+        self.mission_cooldown_seconds = 5.0  # Wait 5 seconds between missions
+        
         # Thread safety
         self.execution_lock = Lock()
         
@@ -417,6 +421,11 @@ class TaskExecutionEngineNode(Node):
         
         # Complete progress tracking
         self.progress_monitor.complete_mission()
+        
+        # Set cooldown timer to prevent MAVROS issues with rapid re-arming
+        import time
+        self.last_mission_completion_time = time.time()
+        self.get_logger().info(f"Mission complete - starting {self.mission_cooldown_seconds}s cooldown before next mission")
     
     def _on_exit_executing(self):
         """Called when exiting EXECUTING state"""
@@ -477,6 +486,21 @@ class TaskExecutionEngineNode(Node):
         
         # Check if there are queued tasks
         if self.task_queue.has_tasks():
+            # Check cooldown period (prevents MAVROS future/promise reuse issues)
+            if self.last_mission_completion_time is not None:
+                import time
+                elapsed = time.time() - self.last_mission_completion_time
+                if elapsed < self.mission_cooldown_seconds:
+                    remaining = self.mission_cooldown_seconds - elapsed
+                    # Still in cooldown, wait silently (logged once per second max)
+                    if int(elapsed * 10) % 10 == 0:  # Log every ~1 second
+                        self.get_logger().info(f"Mission cooldown: waiting {remaining:.1f}s before starting next mission")
+                    return
+                else:
+                    # Cooldown complete
+                    self.get_logger().info(f"Cooldown complete ({elapsed:.1f}s elapsed), starting next mission")
+                    self.last_mission_completion_time = None
+            
             self.state_machine.transition_to(
                 MissionState.VALIDATING,
                 reason="Tasks available in queue"
@@ -847,18 +871,16 @@ class TaskExecutionEngineNode(Node):
         self.current_primitives = []
         self.primitive_index = 0
         
-        # Check for more tasks
+        # Always transition to IDLE first (required by state machine)
+        # The idle state handler will check for queued tasks and transition to validating if needed
         if self.task_queue.has_tasks():
-            self.get_logger().info("More tasks in queue, transitioning to validating")
-            self.state_machine.transition_to(
-                MissionState.VALIDATING,
-                reason="Additional tasks queued"
-            )
+            self.get_logger().info("More tasks in queue, transitioning to idle then will process next")
         else:
             self.get_logger().info("No more tasks, transitioning to idle")
-            self.state_machine.transition_to(
-                MissionState.IDLE,
-                reason="All tasks completed"
+        
+        self.state_machine.transition_to(
+            MissionState.IDLE,
+            reason="All tasks completed"
             )
     
     def _handle_aborted_state(self):
