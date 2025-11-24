@@ -151,6 +151,8 @@ EOF
     SIM_CMD+="--model + "
     SIM_CMD+="--speedup 1 "
     SIM_CMD+="--console "
+    SIM_CMD+="--map "
+    SIM_CMD+="-L IIT "
     SIM_CMD+="--add-param-file=$PARAM_FILE "
     
     # Launch in a detached screen session
