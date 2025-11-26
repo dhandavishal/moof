@@ -15,9 +15,9 @@ cd ~/multi_drone_ws/src/moofs_3d/scripts
 cd ~/multi_drone_ws
 source install/setup.bash
 ros2 launch task_execution complete_system.launch.py drone_id:=0
+ros2 launch squadron_manager squadron_manager.launch.py num_drones:=1
 
-# OR use the simpler test_system.launch.py (hardcoded drone_0)
-ros2 launch task_execution test_system.launch.py
+
 
 # Terminal 3: Send test mission
 

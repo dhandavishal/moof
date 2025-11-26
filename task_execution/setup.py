@@ -32,6 +32,7 @@ setup(
             'tee_node = task_execution.tee_node:main',
             'test_mission_execution = scripts.test_mission_execution:main',
             'monitor_tee_status = scripts.monitor_tee_status:main',
+            'performance_monitor = task_execution.performance_monitor:main',
         ],
     },
 )
