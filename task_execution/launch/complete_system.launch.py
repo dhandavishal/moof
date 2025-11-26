@@ -31,7 +31,14 @@ def generate_launch_description():
         default_value='0',
         description='Drone ID (0-based)'
     )
-    
+    # uncomment to execute in linux machine
+    '''
+    fcu_url_arg = DeclareLaunchArgument(
+        'fcu_url',
+        default_value='udp://:14550@127.0.0.1:14555',
+        description='MAVROS FCU URL for ArduPilot SITL'
+    )
+    '''
     fcu_url_arg = DeclareLaunchArgument(
         'fcu_url',
         # MAVROS connects TO SITL container via TCP (ArduCopter listens on 5760)
