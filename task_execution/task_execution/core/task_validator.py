@@ -130,7 +130,7 @@ class TaskValidator:
         required_params = {
             'survey': ['area', 'altitude'],
             'waypoint': ['waypoints'],
-            'search': ['area', 'pattern'],
+            'search': ['pattern'],  # 'area' OR 'center'+'radius' depending on pattern
             'rtl': []
         }
         
@@ -180,6 +180,33 @@ class TaskValidator:
                     message="Waypoint task must have at least 1 waypoint",
                     details={'severity': 'critical'}
                 )
+        
+        elif task.task_type == 'search':
+            pattern = task.parameters.get('pattern', '')
+            
+            # Validate pattern-specific requirements
+            if pattern in ['expanding_square', 'spiral']:
+                # These patterns need center and radius
+                if 'center' not in task.parameters:
+                    return CheckResult(
+                        passed=False,
+                        message=f"Search pattern '{pattern}' requires 'center' parameter",
+                        details={'severity': 'critical'}
+                    )
+                if 'radius' not in task.parameters:
+                    return CheckResult(
+                        passed=False,
+                        message=f"Search pattern '{pattern}' requires 'radius' parameter",
+                        details={'severity': 'critical'}
+                    )
+            elif pattern in ['creeping_line', 'sector']:
+                # These patterns need area bounds
+                if 'area' not in task.parameters:
+                    return CheckResult(
+                        passed=False,
+                        message=f"Search pattern '{pattern}' requires 'area' parameter",
+                        details={'severity': 'critical'}
+                    )
         
         return CheckResult(passed=True, message="Syntax valid")
     

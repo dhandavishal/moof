@@ -124,6 +124,9 @@ class TaskExecutionEngineNode(Node):
         self.last_mission_completion_time = None
         self.mission_cooldown_seconds = 5.0  # Wait 5 seconds between missions
         
+        # Task validation tracking (prevent multiple get_next_task calls)
+        self.validating_task = None  # Task currently being validated
+        
         # Thread safety
         self.execution_lock = Lock()
         
@@ -509,11 +512,15 @@ class TaskExecutionEngineNode(Node):
     def _handle_validating_state(self):
         """Handle VALIDATING state - validate next task"""
         
-        # Get next task from queue
-        task = self.task_queue.get_next_task()
+        # Get next task from queue (only once per validation cycle)
+        if self.validating_task is None:
+            self.validating_task = self.task_queue.get_next_task()
+        
+        task = self.validating_task
         
         if not task:
             # No tasks available, abort validation
+            self.validating_task = None  # Reset for next cycle
             self.state_machine.transition_to(
                 MissionState.ABORTED,
                 reason="No tasks available"
@@ -545,6 +552,9 @@ class TaskExecutionEngineNode(Node):
                 task.task_id,
                 reason=f"Validation failed: {validation_result.failures[0].message}"
             )
+            
+            # Clear validating task cache
+            self.validating_task = None
             
             # Abort mission
             self.state_machine.transition_to(
@@ -607,6 +617,9 @@ class TaskExecutionEngineNode(Node):
                 total_primitives=len(self.current_primitives)
             )
             
+            # Clear validating task cache (validation complete)
+            self.validating_task = None
+            
             # Transition to executing
             self.state_machine.transition_to(
                 MissionState.EXECUTING,
@@ -616,6 +629,10 @@ class TaskExecutionEngineNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to generate primitives: {e}")
             self.task_queue.mark_failed(task.task_id, reason=str(e))
+            
+            # Clear validating task cache
+            self.validating_task = None
+            
             self.state_machine.transition_to(
                 MissionState.ABORTED,
                 reason="Primitive generation failed"
@@ -755,7 +772,15 @@ class TaskExecutionEngineNode(Node):
                 self.get_logger().error("Takeoff action timed out")
                 return False
         
-        return result_future.result().result.success
+        result = result_future.result().result.success
+        
+        if result:
+            # CRITICAL: Add 1-second stabilization delay after takeoff
+            # This prevents ArduPilot from auto-disarming before next command
+            self.get_logger().info("Takeoff complete - stabilizing for 1 second...")
+            time.sleep(1.0)
+        
+        return result
     
     def _execute_goto(self, primitive: PrimitiveCommand) -> bool:
         """Executes the GOTO action and blocks until complete."""
