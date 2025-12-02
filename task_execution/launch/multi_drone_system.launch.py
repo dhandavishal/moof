@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-Multi-drone system launch file with performance monitoring.
+Multi-drone system launch file with optional performance monitoring.
 
 Launches up to 10 drones with:
 - MAVROS per drone
 - FAL per drone
 - TEE per drone
-- Performance monitor (centralized)
+- Performance monitor (centralized, optional)
 
 Usage:
+    # Basic launch (no performance monitor)
     ros2 launch task_execution multi_drone_system.launch.py num_drones:=3
-    ros2 launch task_execution multi_drone_system.launch.py num_drones:=10 log_level:=warn
+
+    # With performance monitoring enabled
+    ros2 launch task_execution multi_drone_system.launch.py num_drones:=3 enable_monitor:=true
+
+    # Full options
+    ros2 launch task_execution multi_drone_system.launch.py num_drones:=10 log_level:=warn enable_monitor:=true
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction, GroupAction, IncludeLaunchDescription, OpaqueFunction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch_ros.actions import Node, PushRosNamespace
-from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -34,9 +39,11 @@ def generate_drone_nodes(context, *args, **kwargs):
     
     for drone_id in range(num_drones):
         drone_namespace = f'/drone_{drone_id}'
-        # MAVROS listens on UDP port for SITL to send data
-        # Each drone sends to a different port: 14540, 14541, 14542, etc.
-        fcu_url = f'udp://:{14540 + drone_id}@'
+        # MAVROS connects TO SITL container via TCP
+        # Each SITL instance listens on port 5760 + (instance * 10)
+        # Instance 0 = 5760, Instance 1 = 5770, Instance 2 = 5780, etc.
+        sitl_port = 5760 + (drone_id * 10)
+        fcu_url = f'tcp://sitl_drone{drone_id}:{sitl_port}'
         tgt_system = str(drone_id + 1)
         
         # Stagger startup to avoid overwhelming the system
@@ -116,10 +123,44 @@ def generate_drone_nodes(context, *args, **kwargs):
     return nodes
 
 
+def generate_monitor_node(context, *args, **kwargs):
+    """Conditionally generate performance monitor node based on enable_monitor flag."""
+    
+    enable_monitor = LaunchConfiguration('enable_monitor').perform(context).lower()
+    
+    # Only launch performance monitor if explicitly enabled
+    if enable_monitor == 'true':
+        return [
+            TimerAction(
+                period=10.0,
+                actions=[
+                    Node(
+                        package='task_execution',
+                        executable='performance_monitor',
+                        name='performance_monitor',
+                        namespace='/monitoring',
+                        output='screen',
+                        parameters=[{
+                            'sample_rate': 1.0,  # Hz
+                            'log_to_file': True,
+                            'log_directory': '/tmp/moofs_metrics',
+                            'max_drones': 10,
+                        }],
+                    )
+                ]
+            )
+        ]
+    else:
+        # Return empty list - no monitor launched
+        return []
+
+
 def generate_launch_description():
     """Generate launch description for multi-drone system."""
     
-    # Declare arguments
+    # ========================================================================
+    # Launch Arguments
+    # ========================================================================
     num_drones_arg = DeclareLaunchArgument(
         'num_drones',
         default_value='1',
@@ -134,39 +175,25 @@ def generate_launch_description():
     
     enable_monitor_arg = DeclareLaunchArgument(
         'enable_monitor',
-        default_value='true',
-        description='Enable performance monitoring'
-    )
-    
-    # Performance Monitor Node (centralized) - starts after 10 seconds
-    performance_monitor = TimerAction(
-        period=10.0,
-        actions=[
-            Node(
-                package='task_execution',
-                executable='performance_monitor',
-                name='performance_monitor',
-                namespace='/monitoring',
-                output='screen',
-                parameters=[{
-                    'sample_rate': 1.0,  # Hz
-                    'log_to_file': True,
-                    'log_directory': '/tmp/moofs_metrics',
-                    'max_drones': 10,
-                }],
-            )
-        ]
+        default_value='false',
+        description='Enable performance monitoring (true/false)'
     )
     
     return LaunchDescription([
+        # ====================================================================
         # Arguments
+        # ====================================================================
         num_drones_arg,
         log_level_arg,
         enable_monitor_arg,
         
-        # Dynamic drone nodes
+        # ====================================================================
+        # Drone Nodes (MAVROS + FAL + TEE per drone)
+        # ====================================================================
         OpaqueFunction(function=generate_drone_nodes),
         
-        # Performance monitor
-        performance_monitor,
+        # ====================================================================
+        # Performance Monitor (conditional - only if enable_monitor:=true)
+        # ====================================================================
+        OpaqueFunction(function=generate_monitor_node),
     ])

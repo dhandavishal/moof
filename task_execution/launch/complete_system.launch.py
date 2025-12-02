@@ -3,89 +3,79 @@
 Complete single-drone system launch file.
 
 Launches:
-- MAVROS (connects to ArduPilot SITL) using apm.launch
-- TF transform (map -> odom)
+- MAVROS (connects to ArduPilot SITL via TCP)
+- TF transform (map -> drone_N/odom)
 - FAL (Flight Abstraction Layer)
 - TEE (Task Execution Engine)
 
+Usage:
+    # Docker environment (connects to sitl_drone0 container)
+    ros2 launch task_execution complete_system.launch.py
+
+    # With custom drone ID
+    ros2 launch task_execution complete_system.launch.py drone_id:=1
+
+    # Linux native (UDP connection to local SITL)
+    ros2 launch task_execution complete_system.launch.py use_docker:=false
+
 Prerequisites:
-- ArduPilot SITL must be running on ports 14550/14555
+- Docker: SITL container must be running (./scripts/start_multi_drone.sh 1)
+- Native: ArduPilot SITL must be running on UDP port 14550/14555
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction, GroupAction, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from launch.actions import DeclareLaunchArgument, TimerAction, GroupAction, IncludeLaunchDescription, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch_ros.actions import Node, PushRosNamespace
-from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def generate_launch_description():
-    """Generate launch description for complete single-drone system."""
+def generate_drone_nodes(context, *args, **kwargs):
+    """Generate nodes for a single drone based on parameters."""
     
-    # Declare arguments
-    drone_id_arg = DeclareLaunchArgument(
-        'drone_id',
-        default_value='0',
-        description='Drone ID (0-based)'
-    )
-    # uncomment to execute in linux machine
-    '''
-    fcu_url_arg = DeclareLaunchArgument(
-        'fcu_url',
-        default_value='udp://:14550@127.0.0.1:14555',
-        description='MAVROS FCU URL for ArduPilot SITL'
-    )
-    '''
-    fcu_url_arg = DeclareLaunchArgument(
-        'fcu_url',
-        # MAVROS connects TO SITL container via TCP (ArduCopter listens on 5760)
-        default_value='tcp://sitl_drone0:5760',
-        description='MAVROS FCU URL for ArduPilot SITL'
-    )
+    drone_id = int(LaunchConfiguration('drone_id').perform(context))
+    log_level = LaunchConfiguration('log_level').perform(context)
+    use_docker = LaunchConfiguration('use_docker').perform(context).lower() == 'true'
     
-    tgt_system_arg = DeclareLaunchArgument(
-        'tgt_system',
-        default_value='1',
-        description='Target system ID'
-    )
+    # Namespace for this drone
+    drone_namespace = f'/drone_{drone_id}'
     
-    log_level_arg = DeclareLaunchArgument(
-        'log_level',
-        default_value='info',
-        description='Logging level (debug/info/warn/error)'
-    )
+    # FCU URL depends on environment
+    if use_docker:
+        # Docker: MAVROS connects TO SITL container via TCP
+        # Each SITL instance listens on port 5760 + (instance * 10)
+        sitl_port = 5760 + (drone_id * 10)
+        fcu_url = f'tcp://sitl_drone{drone_id}:{sitl_port}'
+    else:
+        # Native Linux: MAVROS connects via UDP to local SITL
+        # Base port 14550, increment by 10 for each drone
+        udp_port = 14550 + (drone_id * 10)
+        fcu_url = f'udp://:{udp_port}@127.0.0.1:{udp_port + 5}'
     
-    # Get launch configurations
-    drone_id = LaunchConfiguration('drone_id')
-    fcu_url = LaunchConfiguration('fcu_url')
-    tgt_system = LaunchConfiguration('tgt_system')
-    log_level = LaunchConfiguration('log_level')
-    
-    # Drone namespace (using TextSubstitution for proper concatenation)
-    drone_namespace = [TextSubstitution(text='/drone_'), drone_id]
-    
-    # TF frame names
-    odom_frame = [TextSubstitution(text='drone_'), drone_id, TextSubstitution(text='/odom')]
+    # Target system ID (1-based)
+    tgt_system = str(drone_id + 1)
     
     # Get MAVROS package directory
     mavros_dir = get_package_share_directory('mavros')
     
-    # ========================================================================
-    # TF Transform: map -> odom (CRITICAL for navigation!)
-    # ========================================================================
-    tf_map_to_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom_static_broadcaster',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', odom_frame],
-        output='screen'
-    )
+    nodes = []
     
     # ========================================================================
-    # MAVROS Node (using apm.launch for full plugin support)
+    # TF Transform: map -> drone_N/odom (Start immediately)
+    # ========================================================================
+    tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name=f'map_to_odom_drone_{drone_id}',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', f'drone_{drone_id}/odom'],
+        output='screen'
+    )
+    nodes.append(tf_node)
+    
+    # ========================================================================
+    # MAVROS Node (Start immediately, uses apm.launch for ArduPilot)
     # ========================================================================
     mavros_group = GroupAction([
         PushRosNamespace(drone_namespace),
@@ -100,12 +90,13 @@ def generate_launch_description():
             }.items()
         )
     ])
+    nodes.append(mavros_group)
     
     # ========================================================================
-    # FAL Node (with delay to wait for MAVROS)
+    # FAL Node (Start after 3s - wait for MAVROS connection)
     # ========================================================================
     fal_node = TimerAction(
-        period=3.0,  # Wait 3 seconds for MAVROS to connect
+        period=3.0,
         actions=[
             Node(
                 package='flight_abstraction',
@@ -121,60 +112,62 @@ def generate_launch_description():
             )
         ]
     )
+    nodes.append(fal_node)
     
     # ========================================================================
-    # TEE Node (with delay to wait for FAL)
+    # TEE Node (Start after 6s - wait for FAL initialization)
     # ========================================================================
-    tee_config_file = PathJoinSubstitution([
-        FindPackageShare('task_execution'),
-        'config',
-        'tee_config.yaml'
-    ])
-    
     tee_node = TimerAction(
-        period=6.0,  # Wait 6 seconds for MAVROS and FAL to initialize
+        period=6.0,
         actions=[
             Node(
                 package='task_execution',
                 executable='tee_node',
                 name='task_execution_engine',
-                namespace=drone_namespace,  # CRITICAL: Add drone namespace!
+                namespace=drone_namespace,
                 output='screen',
                 parameters=[{
-                    'config_path': tee_config_file,
+                    'drone_id': drone_id,
                 }],
                 arguments=['--ros-args', '--log-level', log_level]
             )
         ]
     )
+    nodes.append(tee_node)
+    
+    return nodes
+
+
+def generate_launch_description():
+    """Generate launch description for complete single-drone system."""
     
     # ========================================================================
-    # Status Monitor (Optional - with delay)
+    # Launch Arguments
     # ========================================================================
-    status_monitor = TimerAction(
-        period=10.0,  # Wait 10 seconds for everything to initialize
-        actions=[
-            Node(
-                package='task_execution',
-                executable='monitor_tee_status',
-                name='tee_status_monitor',
-                output='screen',
-                arguments=['--ros-args', '--log-level', 'warn']
-            )
-        ]
+    drone_id_arg = DeclareLaunchArgument(
+        'drone_id',
+        default_value='0',
+        description='Drone ID (0-based). Determines namespace, ports, and system ID.'
+    )
+    
+    log_level_arg = DeclareLaunchArgument(
+        'log_level',
+        default_value='info',
+        description='Logging level (debug/info/warn/error)'
+    )
+    
+    use_docker_arg = DeclareLaunchArgument(
+        'use_docker',
+        default_value='true',
+        description='Use Docker networking (TCP to sitl_droneN) or native UDP'
     )
     
     return LaunchDescription([
         # Arguments
         drone_id_arg,
-        fcu_url_arg,
-        tgt_system_arg,
         log_level_arg,
+        use_docker_arg,
         
-        # Nodes (sequential startup)
-        tf_map_to_odom,   # Start TF transform immediately
-        mavros_group,     # Start MAVROS immediately (with all plugins)
-        fal_node,         # Start after 3s
-        tee_node,         # Start after 6s
-        # status_monitor, # Uncomment to enable automatic status monitoring
+        # Generate drone nodes dynamically
+        OpaqueFunction(function=generate_drone_nodes),
     ])

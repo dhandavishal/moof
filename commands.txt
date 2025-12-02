@@ -66,3 +66,29 @@ source ~/aerostack2_ws/install/setup.bash
 ros2 launch as2_ardu_msn multi_drone_aerostack2.launch.py
 
 -----------------------------------------------------------------
+
+# Basic launch - NO performance monitor (default)
+ros2 launch task_execution multi_drone_system.launch.py num_drones:=3
+
+# With performance monitoring ENABLED
+ros2 launch task_execution multi_drone_system.launch.py num_drones:=3 enable_monitor:=true
+
+# Scalability test with monitoring and reduced logging
+ros2 launch task_execution multi_drone_system.launch.py num_drones:=8 enable_monitor:=true log_level:=warn
+
+# Single drone, debug mode, no monitor
+ros2 launch task_execution multi_drone_system.launch.py num_drones:=1 log_level:=debug
+
+------------------------------------------------------------------
+
+# Docker environment (default) - connects to sitl_drone0
+ros2 launch task_execution complete_system.launch.py
+
+# Docker - specific drone
+ros2 launch task_execution complete_system.launch.py drone_id:=2
+
+# Native Linux - local SITL via UDP
+ros2 launch task_execution complete_system.launch.py use_docker:=false
+
+# Debug mode
+ros2 launch task_execution complete_system.launch.py log_level:=debug

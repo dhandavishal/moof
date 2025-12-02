@@ -9,9 +9,7 @@ Monitors and logs:
 - Connection status per drone
 - System-wide metrics
 
-Metrics are:
-- Published to ROS topics for real-time monitoring
-- Logged to CSV files for post-analysis
+FIXED: Proper latency calculation using message timestamps
 """
 
 import rclpy
@@ -32,7 +30,7 @@ import time
 
 from mavros_msgs.msg import State
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String
+from std_msgs.msg import String, Header
 
 
 @dataclass
@@ -42,38 +40,64 @@ class DroneMetrics:
     connected: bool = False
     armed: bool = False
     mode: str = "UNKNOWN"
-    last_heartbeat: float = 0.0
-    heartbeat_latency_ms: float = 0.0
-    position_update_rate_hz: float = 0.0
-    command_latency_ms: float = 0.0
+    
+    # Timing metrics
+    last_state_time: float = 0.0
+    last_pose_time: float = 0.0
+    state_msg_latency_ms: float = 0.0  # Message timestamp vs receive time
+    pose_msg_latency_ms: float = 0.0
+    
+    # Rate metrics
+    state_rate_hz: float = 0.0
+    pose_rate_hz: float = 0.0
+    
+    # Position
+    position_x: float = 0.0
+    position_y: float = 0.0
+    position_z: float = 0.0
+    
+    # Counters
+    state_count: int = 0
+    pose_count: int = 0
     primitives_executed: int = 0
     primitives_failed: int = 0
-    last_position_x: float = 0.0
-    last_position_y: float = 0.0
-    last_position_z: float = 0.0
 
 
-@dataclass
+@dataclass 
 class SystemMetrics:
     """System-wide metrics."""
-    timestamp: str
+    timestamp: str = ""
+    elapsed_seconds: float = 0.0
+    sample_count: int = 0
+    
+    # Drone counts
     num_drones_connected: int = 0
     num_drones_armed: int = 0
+    
+    # System resources
     total_cpu_percent: float = 0.0
     total_memory_mb: float = 0.0
     total_memory_percent: float = 0.0
+    
+    # Per-process resources
     ros_process_count: int = 0
-    avg_heartbeat_latency_ms: float = 0.0
-    max_heartbeat_latency_ms: float = 0.0
-    avg_position_rate_hz: float = 0.0
+    ros_cpu_percent: float = 0.0
+    ros_memory_mb: float = 0.0
+    
+    # Latency stats (message timestamp to receive time)
+    avg_state_latency_ms: float = 0.0
+    max_state_latency_ms: float = 0.0
+    min_state_latency_ms: float = 0.0
+    
+    # Rate stats
+    avg_state_rate_hz: float = 0.0
+    avg_pose_rate_hz: float = 0.0
     total_messages_per_sec: float = 0.0
 
 
 class PerformanceMonitor(Node):
     """
     Centralized performance monitoring for multi-drone system.
-    
-    Subscribes to MAVROS topics for each drone and aggregates metrics.
     """
     
     def __init__(self):
@@ -92,31 +116,32 @@ class PerformanceMonitor(Node):
         self.max_drones = self.get_parameter('max_drones').value
         self.summary_interval = self.get_parameter('summary_interval').value
         
+        # Timing
+        self.start_time = self.get_clock().now()
+        self.sample_count = 0
+        
         # Create log directory
         if self.log_to_file:
             os.makedirs(self.log_directory, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.metrics_file = os.path.join(
                 self.log_directory, 
-                f'system_metrics_{timestamp}.csv'
+                f'system_metrics_{timestamp_str}.csv'
             )
             self.drone_metrics_file = os.path.join(
                 self.log_directory,
-                f'drone_metrics_{timestamp}.csv'
+                f'drone_metrics_{timestamp_str}.csv'
             )
             self._init_csv_files()
             self.get_logger().info(f'Logging metrics to: {self.log_directory}')
         
         # Drone metrics storage
         self.drone_metrics: Dict[int, DroneMetrics] = {}
-        self.message_timestamps: Dict[str, deque] = {}
+        self.state_timestamps: Dict[int, deque] = {}
+        self.pose_timestamps: Dict[int, deque] = {}
         self.lock = threading.Lock()
         
-        # Track startup time
-        self.start_time = datetime.now()
-        self.samples_collected = 0
-        
-        # QoS for sensor data (best effort for high-rate topics)
+        # QoS for sensor data
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -130,7 +155,7 @@ class PerformanceMonitor(Node):
         for drone_id in range(self.max_drones):
             self._setup_drone_subscriptions(drone_id, sensor_qos)
         
-        # Publisher for aggregated metrics (JSON format)
+        # Publisher for aggregated metrics
         self.metrics_pub = self.create_publisher(
             String, '/monitoring/system_metrics', 10
         )
@@ -155,20 +180,22 @@ class PerformanceMonitor(Node):
         with open(self.metrics_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
-                'timestamp', 'elapsed_seconds', 'num_drones_connected', 'num_drones_armed',
-                'total_cpu_percent', 'total_memory_mb', 'total_memory_percent',
-                'ros_process_count', 'avg_heartbeat_latency_ms', 'max_heartbeat_latency_ms',
-                'avg_position_rate_hz', 'total_messages_per_sec'
+                'timestamp', 'elapsed_s', 'sample', 'drones_connected', 'drones_armed',
+                'cpu_percent', 'memory_mb', 'memory_percent',
+                'ros_processes', 'ros_cpu_percent', 'ros_memory_mb',
+                'avg_state_latency_ms', 'max_state_latency_ms', 'min_state_latency_ms',
+                'avg_state_rate_hz', 'avg_pose_rate_hz', 'total_msg_rate'
             ])
         
         # Drone metrics CSV
         with open(self.drone_metrics_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
-                'timestamp', 'elapsed_seconds', 'drone_id', 'connected', 'armed', 'mode',
-                'heartbeat_latency_ms', 'position_update_rate_hz',
-                'position_x', 'position_y', 'position_z',
-                'primitives_executed', 'primitives_failed'
+                'timestamp', 'elapsed_s', 'drone_id', 'connected', 'armed', 'mode',
+                'state_latency_ms', 'pose_latency_ms',
+                'state_rate_hz', 'pose_rate_hz',
+                'pos_x', 'pos_y', 'pos_z',
+                'state_count', 'pose_count'
             ])
     
     def _setup_drone_subscriptions(self, drone_id: int, qos: QoSProfile):
@@ -177,10 +204,10 @@ class PerformanceMonitor(Node):
         
         # Initialize metrics
         self.drone_metrics[drone_id] = DroneMetrics(drone_id=drone_id)
-        self.message_timestamps[f'pose_{drone_id}'] = deque(maxlen=100)
-        self.message_timestamps[f'state_{drone_id}'] = deque(maxlen=100)
+        self.state_timestamps[drone_id] = deque(maxlen=100)
+        self.pose_timestamps[drone_id] = deque(maxlen=100)
         
-        # MAVROS State subscription
+        # MAVROS State
         self.state_subs[drone_id] = self.create_subscription(
             State,
             f'{namespace}/mavros/state',
@@ -188,13 +215,42 @@ class PerformanceMonitor(Node):
             10
         )
         
-        # Local Position subscription
+        # Local Position
         self.pose_subs[drone_id] = self.create_subscription(
             PoseStamped,
             f'{namespace}/mavros/local_position/pose',
             lambda msg, did=drone_id: self._pose_callback(msg, did),
             qos
         )
+    
+    def _calculate_msg_latency(self, header: Header) -> float:
+        """Calculate latency from message timestamp to now (in ms)."""
+        if header.stamp.sec == 0 and header.stamp.nanosec == 0:
+            return -1.0  # No valid timestamp
+        
+        now = self.get_clock().now()
+        msg_time = Time(seconds=header.stamp.sec, nanoseconds=header.stamp.nanosec)
+        
+        # Handle clock differences (SITL may have different time)
+        latency_ns = now.nanoseconds - msg_time.nanoseconds
+        latency_ms = latency_ns / 1e6
+        
+        # If negative or huge, clocks are not synced - use receive time delta
+        if latency_ms < 0 or latency_ms > 10000:
+            return -1.0
+        
+        return latency_ms
+    
+    def _calculate_rate(self, timestamps: deque) -> float:
+        """Calculate message rate from timestamp history."""
+        if len(timestamps) < 2:
+            return 0.0
+        
+        time_span = timestamps[-1] - timestamps[0]
+        if time_span <= 0:
+            return 0.0
+        
+        return (len(timestamps) - 1) / time_span
     
     def _state_callback(self, msg: State, drone_id: int):
         """Handle MAVROS state updates."""
@@ -203,145 +259,154 @@ class PerformanceMonitor(Node):
         with self.lock:
             metrics = self.drone_metrics[drone_id]
             
-            # Track state message timestamps
-            timestamps = self.message_timestamps[f'state_{drone_id}']
-            timestamps.append(now)
-            
-            # Calculate heartbeat latency (time between state messages)
-            if len(timestamps) >= 2:
-                metrics.heartbeat_latency_ms = (timestamps[-1] - timestamps[-2]) * 1000
-            
-            metrics.last_heartbeat = now
+            # Update state info
             metrics.connected = msg.connected
             metrics.armed = msg.armed
             metrics.mode = msg.mode
+            
+            # Track timing
+            self.state_timestamps[drone_id].append(now)
+            metrics.state_count += 1
+            
+            # Calculate rate
+            metrics.state_rate_hz = self._calculate_rate(self.state_timestamps[drone_id])
+            
+            # Calculate latency (time between state messages)
+            if metrics.last_state_time > 0:
+                delta_ms = (now - metrics.last_state_time) * 1000
+                metrics.state_msg_latency_ms = delta_ms
+            
+            metrics.last_state_time = now
     
     def _pose_callback(self, msg: PoseStamped, drone_id: int):
-        """Handle position updates and calculate update rate."""
+        """Handle position updates."""
         now = self.get_clock().now().nanoseconds / 1e9
         
         with self.lock:
-            timestamps = self.message_timestamps[f'pose_{drone_id}']
-            timestamps.append(now)
-            
-            # Calculate update rate
-            if len(timestamps) >= 2:
-                time_span = timestamps[-1] - timestamps[0]
-                if time_span > 0:
-                    self.drone_metrics[drone_id].position_update_rate_hz = \
-                        (len(timestamps) - 1) / time_span
-            
-            # Store position
             metrics = self.drone_metrics[drone_id]
-            metrics.last_position_x = msg.pose.position.x
-            metrics.last_position_y = msg.pose.position.y
-            metrics.last_position_z = msg.pose.position.z
+            
+            # Track timing
+            self.pose_timestamps[drone_id].append(now)
+            metrics.pose_count += 1
+            
+            # Calculate rate
+            metrics.pose_rate_hz = self._calculate_rate(self.pose_timestamps[drone_id])
+            
+            # Calculate latency from message header
+            latency = self._calculate_msg_latency(msg.header)
+            if latency >= 0:
+                metrics.pose_msg_latency_ms = latency
+            
+            # Update position
+            metrics.position_x = msg.pose.position.x
+            metrics.position_y = msg.pose.position.y
+            metrics.position_z = msg.pose.position.z
+            
+            metrics.last_pose_time = now
     
     def collect_metrics(self):
         """Collect and publish system-wide metrics."""
         try:
-            self.samples_collected += 1
-            elapsed = (datetime.now() - self.start_time).total_seconds()
+            self.sample_count += 1
+            elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
             
-            # Get system-wide resource usage
-            cpu_percent = psutil.cpu_percent()
-            memory = psutil.virtual_memory()
+            # Get process metrics
+            ros_processes = 0
+            ros_cpu = 0.0
+            ros_memory = 0.0
             
-            # Count ROS-related processes
-            ros_process_count = 0
-            for proc in psutil.process_iter(['name']):
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'cpu_percent', 'memory_info']):
                 try:
-                    name = proc.info['name'].lower()
-                    if 'ros' in name or 'python' in name or 'mavros' in name:
-                        ros_process_count += 1
+                    cmdline = ' '.join(proc.info['cmdline'] or []).lower()
+                    name = (proc.info['name'] or '').lower()
+                    
+                    # Check if it's a ROS-related process
+                    if any(x in cmdline or x in name for x in ['ros', 'mavros', 'fal_node', 'tee_node', 'python3']):
+                        ros_processes += 1
+                        ros_cpu += proc.info['cpu_percent'] or 0
+                        if proc.info['memory_info']:
+                            ros_memory += proc.info['memory_info'].rss / 1024 / 1024
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             
             with self.lock:
-                # Count connected and armed drones
-                connected_drones = sum(
-                    1 for m in self.drone_metrics.values() if m.connected
-                )
-                armed_drones = sum(
-                    1 for m in self.drone_metrics.values() if m.armed
-                )
+                # Count connected/armed drones
+                connected_drones = sum(1 for m in self.drone_metrics.values() if m.connected)
+                armed_drones = sum(1 for m in self.drone_metrics.values() if m.armed)
                 
-                # Calculate latency statistics
+                # Calculate latency statistics (only for connected drones)
                 latencies = [
-                    m.heartbeat_latency_ms 
+                    m.state_msg_latency_ms 
                     for m in self.drone_metrics.values() 
-                    if m.connected and m.heartbeat_latency_ms > 0
+                    if m.connected and m.state_msg_latency_ms > 0
                 ]
-                avg_heartbeat = sum(latencies) / len(latencies) if latencies else 0
-                max_heartbeat = max(latencies) if latencies else 0
                 
-                # Calculate average position rate
-                rates = [
-                    m.position_update_rate_hz 
-                    for m in self.drone_metrics.values() 
-                    if m.connected
-                ]
-                avg_rate = sum(rates) / len(rates) if rates else 0
-                total_rate = sum(rates)
+                avg_latency = sum(latencies) / len(latencies) if latencies else 0
+                max_latency = max(latencies) if latencies else 0
+                min_latency = min(latencies) if latencies else 0
+                
+                # Calculate rate statistics
+                state_rates = [m.state_rate_hz for m in self.drone_metrics.values() if m.connected]
+                pose_rates = [m.pose_rate_hz for m in self.drone_metrics.values() if m.connected]
+                
+                avg_state_rate = sum(state_rates) / len(state_rates) if state_rates else 0
+                avg_pose_rate = sum(pose_rates) / len(pose_rates) if pose_rates else 0
+                total_msg_rate = sum(state_rates) + sum(pose_rates)
             
             # Create system metrics
+            mem = psutil.virtual_memory()
             system_metrics = SystemMetrics(
                 timestamp=datetime.now().isoformat(),
+                elapsed_seconds=elapsed,
+                sample_count=self.sample_count,
                 num_drones_connected=connected_drones,
                 num_drones_armed=armed_drones,
-                total_cpu_percent=cpu_percent,
-                total_memory_mb=memory.used / 1024 / 1024,
-                total_memory_percent=memory.percent,
-                ros_process_count=ros_process_count,
-                avg_heartbeat_latency_ms=avg_heartbeat,
-                max_heartbeat_latency_ms=max_heartbeat,
-                avg_position_rate_hz=avg_rate,
-                total_messages_per_sec=total_rate,
+                total_cpu_percent=psutil.cpu_percent(),
+                total_memory_mb=mem.used / 1024 / 1024,
+                total_memory_percent=mem.percent,
+                ros_process_count=ros_processes,
+                ros_cpu_percent=ros_cpu,
+                ros_memory_mb=ros_memory,
+                avg_state_latency_ms=avg_latency,
+                max_state_latency_ms=max_latency,
+                min_state_latency_ms=min_latency,
+                avg_state_rate_hz=avg_state_rate,
+                avg_pose_rate_hz=avg_pose_rate,
+                total_messages_per_sec=total_msg_rate,
             )
             
-            # Publish system metrics as JSON
+            # Publish metrics as JSON
             msg = String()
             msg.data = json.dumps(asdict(system_metrics))
             self.metrics_pub.publish(msg)
             
-            # Publish per-drone metrics as JSON
-            with self.lock:
-                drone_data = {
-                    drone_id: asdict(metrics) 
-                    for drone_id, metrics in self.drone_metrics.items()
-                    if metrics.connected
-                }
-            drone_msg = String()
-            drone_msg.data = json.dumps(drone_data)
-            self.drone_metrics_pub.publish(drone_msg)
-            
-            # Log to CSV files
+            # Log to file
             if self.log_to_file:
-                self._write_system_metrics(system_metrics, elapsed)
+                self._write_system_metrics(system_metrics)
                 self._write_drone_metrics(elapsed)
             
         except Exception as e:
             self.get_logger().error(f'Error collecting metrics: {e}')
     
-    def _write_system_metrics(self, metrics: SystemMetrics, elapsed: float):
+    def _write_system_metrics(self, metrics: SystemMetrics):
         """Write system metrics to CSV."""
         try:
             with open(self.metrics_file, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    metrics.timestamp, f'{elapsed:.2f}',
+                    metrics.timestamp, f'{metrics.elapsed_seconds:.1f}', metrics.sample_count,
                     metrics.num_drones_connected, metrics.num_drones_armed,
-                    f'{metrics.total_cpu_percent:.1f}', 
-                    f'{metrics.total_memory_mb:.0f}',
+                    f'{metrics.total_cpu_percent:.1f}', f'{metrics.total_memory_mb:.0f}', 
                     f'{metrics.total_memory_percent:.1f}',
-                    metrics.ros_process_count,
-                    f'{metrics.avg_heartbeat_latency_ms:.2f}',
-                    f'{metrics.max_heartbeat_latency_ms:.2f}',
-                    f'{metrics.avg_position_rate_hz:.1f}',
+                    metrics.ros_process_count, f'{metrics.ros_cpu_percent:.1f}', 
+                    f'{metrics.ros_memory_mb:.0f}',
+                    f'{metrics.avg_state_latency_ms:.1f}', f'{metrics.max_state_latency_ms:.1f}',
+                    f'{metrics.min_state_latency_ms:.1f}',
+                    f'{metrics.avg_state_rate_hz:.2f}', f'{metrics.avg_pose_rate_hz:.2f}',
                     f'{metrics.total_messages_per_sec:.1f}'
                 ])
         except Exception as e:
-            self.get_logger().warn(f'Error writing system metrics: {e}')
+            self.get_logger().error(f'Error writing system metrics: {e}')
     
     def _write_drone_metrics(self, elapsed: float):
         """Write per-drone metrics to CSV."""
@@ -350,48 +415,43 @@ class PerformanceMonitor(Node):
             with self.lock:
                 with open(self.drone_metrics_file, 'a', newline='') as f:
                     writer = csv.writer(f)
-                    for drone_id, metrics in self.drone_metrics.items():
-                        if metrics.connected:
+                    for drone_id, m in self.drone_metrics.items():
+                        if m.connected:
                             writer.writerow([
-                                timestamp, f'{elapsed:.2f}',
-                                drone_id, metrics.connected, metrics.armed,
-                                metrics.mode, 
-                                f'{metrics.heartbeat_latency_ms:.2f}',
-                                f'{metrics.position_update_rate_hz:.1f}',
-                                f'{metrics.last_position_x:.2f}',
-                                f'{metrics.last_position_y:.2f}',
-                                f'{metrics.last_position_z:.2f}',
-                                metrics.primitives_executed, 
-                                metrics.primitives_failed
+                                timestamp, f'{elapsed:.1f}', drone_id,
+                                m.connected, m.armed, m.mode,
+                                f'{m.state_msg_latency_ms:.1f}', f'{m.pose_msg_latency_ms:.1f}',
+                                f'{m.state_rate_hz:.2f}', f'{m.pose_rate_hz:.2f}',
+                                f'{m.position_x:.2f}', f'{m.position_y:.2f}', f'{m.position_z:.2f}',
+                                m.state_count, m.pose_count
                             ])
         except Exception as e:
-            self.get_logger().warn(f'Error writing drone metrics: {e}')
+            self.get_logger().error(f'Error writing drone metrics: {e}')
     
     def log_metrics_summary(self):
         """Log a summary of current metrics to console."""
+        elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
+        
         with self.lock:
-            connected = [
-                (did, m) for did, m in self.drone_metrics.items() if m.connected
-            ]
+            connected = [(did, m) for did, m in self.drone_metrics.items() if m.connected]
+            armed = sum(1 for _, m in connected if m.armed)
         
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-        
-        self.get_logger().info('=' * 60)
+        # Header
+        self.get_logger().info('=' * 70)
         self.get_logger().info(
-            f'PERFORMANCE SUMMARY (elapsed: {elapsed:.0f}s, samples: {self.samples_collected})'
+            f'PERFORMANCE SUMMARY (elapsed: {elapsed:.0f}s, samples: {self.sample_count})'
         )
         self.get_logger().info(f'Connected drones: {len(connected)}/{self.max_drones}')
+        self.get_logger().info(f'Armed drones: {armed}')
         
+        # Per-drone details
         if connected:
-            armed_count = sum(1 for _, m in connected if m.armed)
-            self.get_logger().info(f'Armed drones: {armed_count}')
-            
-            for drone_id, metrics in connected:
+            for drone_id, m in sorted(connected, key=lambda x: x[0]):
                 self.get_logger().info(
-                    f'  Drone {drone_id}: mode={metrics.mode:10s} armed={str(metrics.armed):5s} '
-                    f'rate={metrics.position_update_rate_hz:5.1f}Hz '
-                    f'lat={metrics.heartbeat_latency_ms:6.1f}ms '
-                    f'pos=({metrics.last_position_x:.1f}, {metrics.last_position_y:.1f}, {metrics.last_position_z:.1f})'
+                    f'  Drone {drone_id}: mode={m.mode:<10} armed={str(m.armed):<5} '
+                    f'state_rate={m.state_rate_hz:5.1f}Hz '
+                    f'pose_rate={m.pose_rate_hz:5.1f}Hz '
+                    f'msgs={m.state_count + m.pose_count}'
                 )
         
         # System stats
@@ -400,7 +460,19 @@ class PerformanceMonitor(Node):
         self.get_logger().info(
             f'System: CPU={cpu:.1f}%, Memory={mem.percent:.1f}% ({mem.used/1024/1024:.0f}MB)'
         )
-        self.get_logger().info('=' * 60)
+        
+        # Latency stats
+        with self.lock:
+            latencies = [m.state_msg_latency_ms for m in self.drone_metrics.values() 
+                        if m.connected and m.state_msg_latency_ms > 0]
+        
+        if latencies:
+            self.get_logger().info(
+                f'State msg interval: avg={sum(latencies)/len(latencies):.0f}ms, '
+                f'min={min(latencies):.0f}ms, max={max(latencies):.0f}ms'
+            )
+        
+        self.get_logger().info('=' * 70)
 
 
 def main(args=None):
@@ -410,7 +482,7 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('Performance monitor shutting down...')
+        node.get_logger().info('Shutting down performance monitor...')
     finally:
         node.destroy_node()
         rclpy.shutdown()
