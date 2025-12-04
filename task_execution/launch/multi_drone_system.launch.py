@@ -9,8 +9,11 @@ Launches up to 10 drones with:
 - Performance monitor (centralized, optional)
 
 Usage:
-    # Basic launch (no performance monitor)
+    # Basic launch with UDP (default - matches your SITL setup)
     ros2 launch task_execution multi_drone_system.launch.py num_drones:=3
+
+    # With TCP connection (alternative)
+    ros2 launch task_execution multi_drone_system.launch.py num_drones:=3 connection_protocol:=tcp
 
     # With performance monitoring enabled
     ros2 launch task_execution multi_drone_system.launch.py num_drones:=3 enable_monitor:=true
@@ -33,17 +36,31 @@ def generate_drone_nodes(context, *args, **kwargs):
     
     num_drones = int(LaunchConfiguration('num_drones').perform(context))
     log_level = LaunchConfiguration('log_level').perform(context)
+    fcu_host = LaunchConfiguration('fcu_host').perform(context)
+    connection_protocol = LaunchConfiguration('connection_protocol').perform(context).lower()
+    sitl_base_port = int(LaunchConfiguration('sitl_port').perform(context))
     
     mavros_dir = get_package_share_directory('mavros')
     nodes = []
     
     for drone_id in range(num_drones):
         drone_namespace = f'/drone_{drone_id}'
-        # MAVROS connects TO SITL container via TCP
-        # Each SITL instance listens on port 5760 + (instance * 10)
-        # Instance 0 = 5760, Instance 1 = 5770, Instance 2 = 5780, etc.
-        sitl_port = 5760 + (drone_id * 10)
-        fcu_url = f'tcp://sitl_drone{drone_id}:{sitl_port}'
+        
+        # Build FCU URL based on protocol
+        if connection_protocol == 'udp':
+            # UDP: MAVROS sends TO MAVProxy listening on host
+            # MAVProxy (on Mac) listens on udpin:0.0.0.0:14570, 14580, 14590...
+            # MAVROS (in Docker) sends TO host.docker.internal:14570, 14580, 14590...
+            udp_port = sitl_base_port + (drone_id * 10)
+            # Use udp:// to send packets to the host
+            fcu_url = f'udp://{fcu_host}:{udp_port}@'
+        else:
+            # TCP: MAVROS connects to MAVProxy TCP listener
+            # MAVProxy listens on tcpin:0.0.0.0:14550, 14560, 14570...
+            # Drone 0: 14550, Drone 1: 14560, Drone 2: 14570, etc.
+            tcp_port = sitl_base_port + (drone_id * 10)
+            fcu_url = f'tcp://{fcu_host}:{tcp_port}'
+        
         tgt_system = str(drone_id + 1)
         
         # Stagger startup to avoid overwhelming the system
@@ -173,10 +190,28 @@ def generate_launch_description():
         description='Logging level (debug/info/warn/error)'
     )
     
+    connection_protocol_arg = DeclareLaunchArgument(
+        'connection_protocol',
+        default_value='tcp',
+        description='Protocol to use for MAVROS connection (tcp/udp)'
+    )
+    
+    sitl_port_arg = DeclareLaunchArgument(
+        'sitl_port',
+        default_value='14550',
+        description='Base TCP port for SITL connection (14550 for tcpin MAVProxy, 5760 for direct)'
+    )
+    
     enable_monitor_arg = DeclareLaunchArgument(
         'enable_monitor',
         default_value='false',
         description='Enable performance monitoring (true/false)'
+    )
+    
+    fcu_host_arg = DeclareLaunchArgument(
+        'fcu_host',
+        default_value='host.docker.internal',
+        description='FCU host address (host.docker.internal for host SITL, or sitl_droneN for container SITL)'
     )
     
     return LaunchDescription([
@@ -185,7 +220,10 @@ def generate_launch_description():
         # ====================================================================
         num_drones_arg,
         log_level_arg,
+        connection_protocol_arg,
+        sitl_port_arg,
         enable_monitor_arg,
+        fcu_host_arg,
         
         # ====================================================================
         # Drone Nodes (MAVROS + FAL + TEE per drone)

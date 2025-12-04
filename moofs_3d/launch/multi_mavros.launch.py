@@ -23,9 +23,12 @@ def generate_system_nodes(context, *args, **kwargs):
     num_drones = int(LaunchConfiguration('num_drones').perform(context))
     use_state_estimator = LaunchConfiguration('use_state_estimator').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
+    fcu_protocol = LaunchConfiguration('fcu_protocol').perform(context)
+    fcu_host = LaunchConfiguration('fcu_host').perform(context)
     
     base_fcu_port = 14550
     base_gcs_port = 14555
+    base_tcp_port = 5760
     
     mavros_dir = get_package_share_directory('mavros')
     
@@ -36,10 +39,15 @@ def generate_system_nodes(context, *args, **kwargs):
         drone_id = i
         namespace = f'drone_{drone_id}'
         
-        # Calculate unique ports for this drone
-        fcu_port = base_fcu_port + (drone_id * 10)
-        gcs_port = base_gcs_port + (drone_id * 10)
-        fcu_url = f'udp://:{gcs_port}@127.0.0.1:{fcu_port}'
+        # Calculate connection URL
+        if fcu_protocol == 'tcp':
+            port = base_tcp_port + (drone_id * 10)
+            fcu_url = f'tcp://{fcu_host}:{port}'
+        else:
+            # Calculate unique ports for this drone
+            fcu_port = base_fcu_port + (drone_id * 10)
+            gcs_port = base_gcs_port + (drone_id * 10)
+            fcu_url = f'udp://:{gcs_port}@{fcu_host}:{fcu_port}'
         
         # MAVROS Launch wrapped in namespace group
         mavros_launch = GroupAction([
@@ -130,10 +138,24 @@ def generate_launch_description():
         description='Use state estimator for each drone'
     )
     
+    fcu_protocol_arg = DeclareLaunchArgument(
+        'fcu_protocol',
+        default_value='udp',
+        description='Protocol to communicate with FCU (udp/tcp)'
+    )
+
+    fcu_host_arg = DeclareLaunchArgument(
+        'fcu_host',
+        default_value='127.0.0.1',
+        description='Host address of the FCU (SITL)'
+    )
+    
     ld = LaunchDescription()
     ld.add_action(num_drones_arg)
     ld.add_action(use_sim_time_arg)
     ld.add_action(use_state_estimator_arg)
+    ld.add_action(fcu_protocol_arg)
+    ld.add_action(fcu_host_arg)
     ld.add_action(OpaqueFunction(function=generate_system_nodes))
     
     return ld

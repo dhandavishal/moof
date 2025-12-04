@@ -38,16 +38,26 @@ def generate_drone_nodes(context, *args, **kwargs):
     drone_id = int(LaunchConfiguration('drone_id').perform(context))
     log_level = LaunchConfiguration('log_level').perform(context)
     use_docker = LaunchConfiguration('use_docker').perform(context).lower() == 'true'
+    fcu_host = LaunchConfiguration('fcu_host').perform(context)
+    connection_protocol = LaunchConfiguration('connection_protocol').perform(context).lower()
+    sitl_base_port = int(LaunchConfiguration('sitl_port').perform(context))
     
     # Namespace for this drone
     drone_namespace = f'/drone_{drone_id}'
     
     # FCU URL depends on environment
     if use_docker:
-        # Docker: MAVROS connects TO SITL container via TCP
-        # Each SITL instance listens on port 5760 + (instance * 10)
-        sitl_port = 5760 + (drone_id * 10)
-        fcu_url = f'tcp://sitl_drone{drone_id}:{sitl_port}'
+        if connection_protocol == 'udp':
+            # Docker: MAVROS connects via UDP to Host SITL
+            # Port = base + (drone_id * 10)
+            udp_port = sitl_base_port + (drone_id * 10)
+            # Bind to local port, target host port
+            fcu_url = f'udp://:{udp_port}@{fcu_host}:{udp_port}'
+        else:
+            # Docker: MAVROS connects TO SITL via TCP
+            # Each SITL instance listens on port 5760 + (instance * 10)
+            sitl_port = 5760 + (drone_id * 10)
+            fcu_url = f'tcp://{fcu_host}:{sitl_port}'
     else:
         # Native Linux: MAVROS connects via UDP to local SITL
         # Base port 14550, increment by 10 for each drone
@@ -150,6 +160,18 @@ def generate_launch_description():
         description='Drone ID (0-based). Determines namespace, ports, and system ID.'
     )
     
+    connection_protocol_arg = DeclareLaunchArgument(
+        'connection_protocol',
+        default_value='tcp',
+        description='Protocol to use for MAVROS connection (tcp/udp)'
+    )
+    
+    sitl_port_arg = DeclareLaunchArgument(
+        'sitl_port',
+        default_value='14550',
+        description='Base port for SITL connection (14550 for tcpin MAVProxy)'
+    )
+    
     log_level_arg = DeclareLaunchArgument(
         'log_level',
         default_value='info',
@@ -162,11 +184,20 @@ def generate_launch_description():
         description='Use Docker networking (TCP to sitl_droneN) or native UDP'
     )
     
+    fcu_host_arg = DeclareLaunchArgument(
+        'fcu_host',
+        default_value='host.docker.internal',
+        description='FCU host address (host.docker.internal for host SITL, or sitl_droneN for container SITL)'
+    )
+    
     return LaunchDescription([
         # Arguments
         drone_id_arg,
+        connection_protocol_arg,
+        sitl_port_arg,
         log_level_arg,
         use_docker_arg,
+        fcu_host_arg,
         
         # Generate drone nodes dynamically
         OpaqueFunction(function=generate_drone_nodes),
