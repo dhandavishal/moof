@@ -175,10 +175,22 @@ class TakeoffPrimitive(BasePrimitive):
             else:
                 # MAVROS bug workaround: service timeout but command might have been sent
                 self.logger.warn("Takeoff service timed out, checking if altitude is increasing...")
-                time.sleep(1.0)  # Wait a moment for takeoff to start
                 
-                # Check if altitude is increasing (indicating takeoff started)
-                if self.current_altitude > (self.initial_altitude + 0.5):
+                # Wait and spin to allow callbacks to update altitude
+                initial_alt = self.current_altitude
+                check_start = time.time()
+                altitude_increasing = False
+                
+                while (time.time() - check_start) < 3.0:  # Check for 3 seconds
+                    # Use spin_once to process callbacks
+                    rclpy.spin_once(self.node, timeout_sec=0.1)
+                    
+                    if self.current_altitude > (initial_alt + 0.5):
+                        altitude_increasing = True
+                        break
+                    time.sleep(0.1)
+                
+                if altitude_increasing:
                     self.logger.info("Takeoff detected despite service timeout (MAVROS bug workaround)")
                     self.state = PrimitiveState.EXECUTING
                     self.command_sent_time = time.time()

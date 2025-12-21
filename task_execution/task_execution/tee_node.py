@@ -62,14 +62,15 @@ class TaskExecutionEngineNode(Node):
         self.task_queue = TaskQueue(self)
         self.validator = TaskValidator(self, self.config)
         
-        # Initialize monitors
-        self.battery_monitor = BatteryMonitor(self, self.config, namespace='/drone_0')
-        self.gps_monitor = GPSMonitor(self, self.config, namespace='/drone_0')
+        # Drone namespace - get from ROS2 node namespace
+        node_namespace = self.get_namespace()
+        self.drone_namespace = node_namespace if node_namespace != '/' else '/drone_0'
+        
+        # Initialize monitors with the correct namespace
+        self.battery_monitor = BatteryMonitor(self, self.config, namespace=self.drone_namespace)
+        self.gps_monitor = GPSMonitor(self, self.config, namespace=self.drone_namespace)
         self.health_monitor = HealthMonitor(self, self.battery_monitor, self.gps_monitor)
         self.progress_monitor = ProgressMonitor(self)
-        
-        # Drone namespace
-        self.drone_namespace = '/drone_0'  # TODO: Make configurable
         
         # FAL Action Clients - for action-based communication
         self.get_logger().info(f"Creating FAL action clients for {self.drone_namespace}")

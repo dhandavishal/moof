@@ -36,18 +36,24 @@ class FALNode(Node):
     through MAVROS.
     """
     
-    def __init__(self, drone_namespace: str = "/drone_0"):
+    def __init__(self, drone_namespace: str = None):
         """
         Initialize the FAL node.
         
         Args:
-            drone_namespace: Namespace for this drone (e.g., '/drone_0')
+            drone_namespace: Namespace for this drone (e.g., '/drone_0').
+                           If None, derives from ROS2 node namespace.
         """
         super().__init__('fal_node')
         
-        # Store drone namespace
-        self.drone_namespace = drone_namespace
-        self.get_logger().info(f"Initializing FAL node for {drone_namespace}")
+        # Derive drone namespace from ROS2 node namespace if not provided
+        if drone_namespace is None:
+            node_ns = self.get_namespace()
+            self.drone_namespace = node_ns if node_ns != '/' else '/drone_0'
+        else:
+            self.drone_namespace = drone_namespace
+            
+        self.get_logger().info(f"Initializing FAL node for {self.drone_namespace}")
         
         # Create callback groups - all Reentrant to allow concurrent execution
         self.action_callback_group = ReentrantCallbackGroup()
@@ -56,16 +62,16 @@ class FALNode(Node):
         self.subscription_callback_group = ReentrantCallbackGroup()
         
         # Initialize primitives with shared subscription callback group
-        self.arm_primitive = ArmPrimitive(self, drone_namespace, self.subscription_callback_group)
-        self.takeoff_primitive = TakeoffPrimitive(self, drone_namespace, self.subscription_callback_group)
-        self.goto_primitive = GotoPrimitive(self, drone_namespace, self.subscription_callback_group)
-        self.land_primitive = LandPrimitive(self, drone_namespace, self.subscription_callback_group)
+        self.arm_primitive = ArmPrimitive(self, self.drone_namespace, self.subscription_callback_group)
+        self.takeoff_primitive = TakeoffPrimitive(self, self.drone_namespace, self.subscription_callback_group)
+        self.goto_primitive = GotoPrimitive(self, self.drone_namespace, self.subscription_callback_group)
+        self.land_primitive = LandPrimitive(self, self.drone_namespace, self.subscription_callback_group)
         
         # Create action servers
         self.takeoff_action_server = ActionServer(
             self,
             Takeoff,
-            f'{drone_namespace}/takeoff',
+            f'{self.drone_namespace}/takeoff',
             self.takeoff_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
@@ -75,7 +81,7 @@ class FALNode(Node):
         self.land_action_server = ActionServer(
             self,
             Land,
-            f'{drone_namespace}/land',
+            f'{self.drone_namespace}/land',
             self.land_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
@@ -85,7 +91,7 @@ class FALNode(Node):
         self.goto_action_server = ActionServer(
             self,
             GoToWaypoint,
-            f'{drone_namespace}/goto_waypoint',
+            f'{self.drone_namespace}/goto_waypoint',
             self.goto_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
@@ -95,7 +101,7 @@ class FALNode(Node):
         self.execute_primitive_action_server = ActionServer(
             self,
             ExecutePrimitive,
-            f'{drone_namespace}/execute_primitive',
+            f'{self.drone_namespace}/execute_primitive',
             self.execute_primitive_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
@@ -105,7 +111,7 @@ class FALNode(Node):
         # Create arm/disarm service with async handling
         self.arm_service = self.create_service(
             ArmDisarm,
-            f'{drone_namespace}/arm_disarm',
+            f'{self.drone_namespace}/arm_disarm',
             self.arm_disarm_callback_async,
             callback_group=self.service_callback_group
         )
@@ -580,14 +586,9 @@ def main(args=None):
     """Main entry point for FAL node."""
     rclpy.init(args=args)
     
-    # Create a temporary node to declare and retrieve the parameter
-    temp_node = rclpy.create_node('fal_param_node')
-    temp_node.declare_parameter('drone_namespace', '/drone_0')
-    drone_namespace = temp_node.get_parameter('drone_namespace').value
-    temp_node.destroy_node()
-    
-    # Create and spin the FAL node
-    fal_node = FALNode(drone_namespace=drone_namespace)
+    # Create FAL node first - it will inherit namespace from launch
+    # Then determine drone_namespace from node's own namespace
+    fal_node = FALNode(drone_namespace=None)  # Will be set in __init__
     
     # Use multi-threaded executor
     executor = MultiThreadedExecutor(num_threads=4)

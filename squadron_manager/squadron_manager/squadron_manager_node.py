@@ -341,9 +341,10 @@ class SquadronManagerNode(Node):
         """Handle a drone failure by removing it from all active barriers"""
         barriers_affected = []
         
-        for barrier_id, barrier in self.barrier_manager._barriers.items():
-            if drone_id in barrier.participants:
-                barrier.remove_participant(drone_id)
+        for barrier_id, barrier in self.barrier_manager.barriers.items():
+            if drone_id in barrier.expected_drones:
+                barrier.expected_drones.discard(drone_id)
+                barrier.expected_count = len(barrier.expected_drones)
                 barriers_affected.append(barrier_id)
         
         if barriers_affected:
@@ -600,8 +601,8 @@ class SquadronManagerNode(Node):
         # Create synchronization barriers for this mission
         # Barrier 1: All drones must be ready before takeoff
         takeoff_barrier = self.barrier_manager.create_barrier(
-            barrier_id=f"{mission_id}_takeoff",
-            participant_ids=drone_ids,
+            name=f"{mission_id}_takeoff",
+            num_drones=len(drone_ids),
             timeout=30.0,
             on_complete=lambda b: self._on_barrier_complete(b, 'takeoff'),
             on_timeout=lambda b: self._on_barrier_timeout(b, 'takeoff')
@@ -609,8 +610,8 @@ class SquadronManagerNode(Node):
         
         # Barrier 2: All drones reach formation altitude before proceeding
         altitude_barrier = self.barrier_manager.create_barrier(
-            barrier_id=f"{mission_id}_altitude",
-            participant_ids=drone_ids,
+            name=f"{mission_id}_altitude",
+            num_drones=len(drone_ids),
             timeout=60.0,
             on_complete=lambda b: self._on_barrier_complete(b, 'altitude'),
             on_timeout=lambda b: self._on_barrier_timeout(b, 'altitude')
@@ -618,8 +619,8 @@ class SquadronManagerNode(Node):
         
         # Barrier 3: Formation established before mission execution
         formation_barrier = self.barrier_manager.create_barrier(
-            barrier_id=f"{mission_id}_formation",
-            participant_ids=drone_ids,
+            name=f"{mission_id}_formation",
+            num_drones=len(drone_ids),
             timeout=45.0,
             on_complete=lambda b: self._on_barrier_complete(b, 'formation'),
             on_timeout=lambda b: self._on_barrier_timeout(b, 'formation')
