@@ -4,6 +4,7 @@ Squadron Manager Node - Coordinates multi-drone operations
 """
 
 import json
+import copy
 from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
@@ -13,6 +14,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from squadron_manager.drone_registry import DroneRegistry, DroneState, DroneCapabilities
 from squadron_manager.task_allocator import TaskAllocator, AllocationStrategy, TaskRequirements
 from squadron_manager.formation_controller import FormationController, FormationType, FormationParameters
+from squadron_manager.sync_barrier import BarrierManager, SyncBarrier
 
 # ROS messages
 from std_msgs.msg import String, Empty
@@ -57,12 +59,23 @@ class SquadronManagerNode(Node):
             'greedy': AllocationStrategy.GREEDY,
             'nearest': AllocationStrategy.NEAREST,
             'load_balanced': AllocationStrategy.LOAD_BALANCED,
-            'capability_based': AllocationStrategy.CAPABILITY_BASED
+            'capability_based': AllocationStrategy.CAPABILITY_BASED,
+            'optimal': AllocationStrategy.OPTIMAL
         }
         strategy = strategy_map.get(strategy_str, AllocationStrategy.NEAREST)
         self.task_allocator = TaskAllocator(self.get_logger(), strategy)
         
         self.formation_controller = FormationController(self.get_logger())
+        
+        # Initialize sync barrier manager for coordinated operations
+        self.barrier_manager = BarrierManager(self.get_logger())
+        
+        # Store active missions for potential re-allocation
+        # Key: mission_id, Value: full mission dict
+        self.active_missions: Dict[str, Dict] = {}
+        
+        # Track mission assignments: drone_id -> mission_id
+        self.drone_mission_map: Dict[str, str] = {}
         
         # QoS profiles
         self.mavros_qos = QoSProfile(
@@ -281,6 +294,11 @@ class SquadronManagerNode(Node):
                 f"state={state}, progress={status.get('progress', 0):.1f}%"
             )
             
+            # Handle sync barrier arrivals
+            if 'barrier_arrived' in status:
+                barrier_id = status['barrier_arrived']
+                self.handle_drone_barrier_arrival(drone_id, barrier_id)
+            
             # Update task progress
             if 'progress' in status:
                 self.drone_registry.update_task_progress(
@@ -296,6 +314,12 @@ class SquadronManagerNode(Node):
                 )
                 self.drone_registry.complete_task(drone_id)
                 self.task_allocator.deallocate_task(mission_id)
+                
+                # Clean up stored mission
+                if mission_id in self.active_missions:
+                    del self.active_missions[mission_id]
+                if drone_id in self.drone_mission_map:
+                    del self.drone_mission_map[drone_id]
             
             # Check if mission failed/aborted
             elif state in ['aborted', 'failed']:
@@ -304,11 +328,28 @@ class SquadronManagerNode(Node):
                     f"(reason: {status.get('error', 'unknown')})"
                 )
                 
+                # Handle drone removal from barriers
+                self._handle_drone_failure_barriers(drone_id)
+                
                 # Handle mission failure with potential re-allocation
                 self._handle_mission_failure(drone_id, mission_id, status)
         
         except json.JSONDecodeError:
             self.get_logger().warning(f"Invalid mission status from {drone_id}")
+    
+    def _handle_drone_failure_barriers(self, drone_id: str):
+        """Handle a drone failure by removing it from all active barriers"""
+        barriers_affected = []
+        
+        for barrier_id, barrier in self.barrier_manager._barriers.items():
+            if drone_id in barrier.participants:
+                barrier.remove_participant(drone_id)
+                barriers_affected.append(barrier_id)
+        
+        if barriers_affected:
+            self.get_logger().warning(
+                f"Removed failed drone {drone_id} from barriers: {barriers_affected}"
+            )
     
     def _handle_mission_failure(self, failed_drone_id: str, mission_id: str, status: Dict):
         """
@@ -323,36 +364,139 @@ class SquadronManagerNode(Node):
         self.drone_registry.complete_task(failed_drone_id)
         self.task_allocator.deallocate_task(mission_id)
         
+        # Clear from drone-mission map
+        if failed_drone_id in self.drone_mission_map:
+            del self.drone_mission_map[failed_drone_id]
+        
         # Check if we should attempt re-allocation
         enable_reallocation = self.get_parameter('enable_task_reallocation').value
         
-        if enable_reallocation:
-            # Get available drones (excluding the failed one)
-            available_drones = [
-                d for d in self.drone_registry.get_available_drones()
-                if d.drone_id != failed_drone_id
-            ]
-            
-            if available_drones:
-                self.get_logger().info(
-                    f"Attempting to re-allocate failed mission {mission_id} "
-                    f"to another drone ({len(available_drones)} available)"
-                )
-                
-                # TODO: Store original mission details for re-allocation
-                # For now, just log that re-allocation would happen
-                self.get_logger().warning(
-                    f"Mission re-allocation not yet fully implemented. "
-                    f"Mission {mission_id} lost."
-                )
-            else:
-                self.get_logger().error(
-                    f"Cannot re-allocate mission {mission_id}: No available drones"
-                )
-        else:
+        if not enable_reallocation:
             self.get_logger().warning(
                 f"Mission re-allocation disabled. Mission {mission_id} lost."
             )
+            # Clean up stored mission
+            if mission_id in self.active_missions:
+                del self.active_missions[mission_id]
+            return
+        
+        # Check if we have the original mission stored
+        if mission_id not in self.active_missions:
+            self.get_logger().error(
+                f"Cannot re-allocate mission {mission_id}: "
+                f"Original mission data not found"
+            )
+            return
+        
+        original_mission = self.active_missions[mission_id]
+        
+        # Get mission progress to determine remaining work
+        progress = status.get('progress', 0.0)
+        remaining_waypoints = status.get('remaining_waypoints', None)
+        
+        # Get available drones (excluding the failed one)
+        available_drones = [
+            d for d in self.drone_registry.get_available_drones()
+            if d.drone_id != failed_drone_id
+        ]
+        
+        if not available_drones:
+            self.get_logger().error(
+                f"Cannot re-allocate mission {mission_id}: No available drones"
+            )
+            return
+        
+        self.get_logger().info(
+            f"Attempting to re-allocate failed mission {mission_id} "
+            f"(progress: {progress:.1f}%) to another drone "
+            f"({len(available_drones)} available)"
+        )
+        
+        # Create supplementary mission with remaining work
+        self._reallocate_mission(
+            original_mission,
+            available_drones,
+            progress,
+            remaining_waypoints
+        )
+    
+    def _reallocate_mission(
+        self,
+        original_mission: Dict,
+        available_drones: List,
+        progress: float,
+        remaining_waypoints: Optional[List] = None
+    ):
+        """
+        Re-allocate a mission to a new drone.
+        
+        Args:
+            original_mission: The original mission dictionary
+            available_drones: List of available drones
+            progress: How much of the mission was completed (0-100)
+            remaining_waypoints: Specific remaining waypoints if available
+        """
+        mission_id = original_mission.get('mission_id', 'unknown')
+        
+        # Create a new mission based on remaining work
+        new_mission = copy.deepcopy(original_mission)
+        new_mission['mission_id'] = f"{mission_id}_reallocated"
+        new_mission['original_mission_id'] = mission_id
+        new_mission['is_reallocation'] = True
+        
+        # Update waypoints if we have remaining waypoint info
+        if remaining_waypoints is not None:
+            if 'parameters' not in new_mission:
+                new_mission['parameters'] = {}
+            new_mission['parameters']['waypoints'] = remaining_waypoints
+        elif progress > 0:
+            # Estimate remaining waypoints based on progress
+            if 'parameters' in new_mission and 'waypoints' in new_mission['parameters']:
+                waypoints = new_mission['parameters']['waypoints']
+                completed_count = int(len(waypoints) * (progress / 100.0))
+                new_mission['parameters']['waypoints'] = waypoints[completed_count:]
+        
+        # Create requirements for allocation
+        requirements = TaskRequirements()
+        
+        if 'parameters' in new_mission and 'waypoints' in new_mission['parameters']:
+            waypoints = new_mission['parameters']['waypoints']
+            if waypoints:
+                first_wp = waypoints[0]
+                requirements.target_location = (
+                    first_wp.get('x', 0.0),
+                    first_wp.get('y', 0.0),
+                    first_wp.get('z', 50.0)
+                )
+        
+        # Allocate to best available drone
+        selected_drone_id = self.task_allocator.allocate_task(
+            task_id=new_mission['mission_id'],
+            available_drones=available_drones,
+            requirements=requirements
+        )
+        
+        if not selected_drone_id:
+            self.get_logger().error(
+                f"Failed to find suitable drone for re-allocated mission"
+            )
+            return
+        
+        # Assign and send mission
+        self.drone_registry.assign_task(selected_drone_id, new_mission['mission_id'])
+        self.drone_mission_map[selected_drone_id] = new_mission['mission_id']
+        self.active_missions[new_mission['mission_id']] = new_mission
+        
+        # Remove original mission
+        if mission_id in self.active_missions:
+            del self.active_missions[mission_id]
+        
+        self._send_mission_to_drone(selected_drone_id, new_mission)
+        
+        self.get_logger().info(
+            f"✓ Re-allocated mission {mission_id} → {new_mission['mission_id']} "
+            f"to {selected_drone_id}"
+        )
     
     def _mission_command_callback(self, msg: String):
         """
@@ -428,11 +572,15 @@ class SquadronManagerNode(Node):
         # Assign task in registry
         self.drone_registry.assign_task(selected_drone_id, mission_id)
         
+        # Store mission for potential re-allocation
+        self.active_missions[mission_id] = copy.deepcopy(mission)
+        self.drone_mission_map[selected_drone_id] = mission_id
+        
         # Send mission to selected drone's TEE
         self._send_mission_to_drone(selected_drone_id, mission)
     
     def _handle_multi_drone_mission(self, mission: Dict):
-        """Coordinate a multi-drone mission"""
+        """Coordinate a multi-drone mission with sync barriers"""
         mission_id = mission.get('mission_id', 'unknown')
         formation_type = mission.get('formation_type', 'line')
         
@@ -447,7 +595,42 @@ class SquadronManagerNode(Node):
             self.get_logger().error("Need at least 2 drones for multi-drone mission")
             return
         
-        # Create formation
+        drone_ids = [d.drone_id for d in available_drones]
+        
+        # Create synchronization barriers for this mission
+        # Barrier 1: All drones must be ready before takeoff
+        takeoff_barrier = self.barrier_manager.create_barrier(
+            barrier_id=f"{mission_id}_takeoff",
+            participant_ids=drone_ids,
+            timeout=30.0,
+            on_complete=lambda b: self._on_barrier_complete(b, 'takeoff'),
+            on_timeout=lambda b: self._on_barrier_timeout(b, 'takeoff')
+        )
+        
+        # Barrier 2: All drones reach formation altitude before proceeding
+        altitude_barrier = self.barrier_manager.create_barrier(
+            barrier_id=f"{mission_id}_altitude",
+            participant_ids=drone_ids,
+            timeout=60.0,
+            on_complete=lambda b: self._on_barrier_complete(b, 'altitude'),
+            on_timeout=lambda b: self._on_barrier_timeout(b, 'altitude')
+        )
+        
+        # Barrier 3: Formation established before mission execution
+        formation_barrier = self.barrier_manager.create_barrier(
+            barrier_id=f"{mission_id}_formation",
+            participant_ids=drone_ids,
+            timeout=45.0,
+            on_complete=lambda b: self._on_barrier_complete(b, 'formation'),
+            on_timeout=lambda b: self._on_barrier_timeout(b, 'formation')
+        )
+        
+        self.get_logger().info(
+            f"Created sync barriers for mission {mission_id}: "
+            f"takeoff, altitude, formation"
+        )
+        
+        # Create formation parameters
         formation_params = FormationParameters(
             formation_type=FormationType(formation_type),
             spacing=mission.get('spacing', 10.0),
@@ -456,12 +639,120 @@ class SquadronManagerNode(Node):
         
         self.formation_controller.create_formation(available_drones, formation_params)
         
-        # Generate individual missions for each drone
-        # TODO: Implement waypoint generation based on formation
+        # Generate and send individual missions for each drone
+        base_waypoints = mission.get('parameters', {}).get('waypoints', [])
+        formation_positions = self.formation_controller.get_formation_positions(
+            available_drones,
+            formation_params
+        )
+        
+        for i, drone in enumerate(available_drones):
+            drone_id = drone.drone_id
+            
+            # Create individual mission with sync points
+            individual_mission = {
+                'mission_id': f"{mission_id}_{drone_id}",
+                'parent_mission_id': mission_id,
+                'task_type': mission.get('task_type', 'formation_flight'),
+                'sync_barriers': {
+                    'takeoff': f"{mission_id}_takeoff",
+                    'altitude': f"{mission_id}_altitude",
+                    'formation': f"{mission_id}_formation"
+                },
+                'formation_position': formation_positions.get(drone_id, i),
+                'parameters': {
+                    'waypoints': self._offset_waypoints(
+                        base_waypoints,
+                        formation_positions.get(drone_id, (i * 5.0, 0.0, 0.0))
+                    ),
+                    'altitude': mission.get('altitude', 50.0),
+                    'speed': mission.get('speed', 3.0)
+                }
+            }
+            
+            # Assign and track
+            self.drone_registry.assign_task(drone_id, individual_mission['mission_id'])
+            self.active_missions[individual_mission['mission_id']] = individual_mission
+            self.drone_mission_map[drone_id] = individual_mission['mission_id']
+            
+            # Send to drone
+            self._send_mission_to_drone(drone_id, individual_mission)
         
         self.get_logger().info(
-            f"Multi-drone mission {mission_id} distributed to {len(available_drones)} drones"
+            f"Multi-drone mission {mission_id} distributed to {len(available_drones)} drones "
+            f"with {len(base_waypoints)} waypoints per drone"
         )
+    
+    def _offset_waypoints(
+        self,
+        waypoints: List[Dict],
+        offset: tuple
+    ) -> List[Dict]:
+        """Offset waypoints by formation position"""
+        offset_waypoints = []
+        for wp in waypoints:
+            new_wp = copy.deepcopy(wp)
+            new_wp['x'] = wp.get('x', 0.0) + offset[0]
+            new_wp['y'] = wp.get('y', 0.0) + offset[1]
+            # Z offset is usually handled differently (keep same altitude)
+            offset_waypoints.append(new_wp)
+        return offset_waypoints
+    
+    def _on_barrier_complete(self, barrier: SyncBarrier, barrier_type: str):
+        """Handle barrier completion"""
+        self.get_logger().info(
+            f"✓ Barrier '{barrier.barrier_id}' ({barrier_type}) completed - "
+            f"all {len(barrier.participants)} drones synchronized"
+        )
+        
+        # Publish barrier completion event
+        msg = String()
+        msg.data = json.dumps({
+            'event': 'barrier_complete',
+            'barrier_id': barrier.barrier_id,
+            'barrier_type': barrier_type,
+            'participants': list(barrier.participants)
+        })
+        self.squadron_status_pub.publish(msg)
+    
+    def _on_barrier_timeout(self, barrier: SyncBarrier, barrier_type: str):
+        """Handle barrier timeout"""
+        missing = barrier.get_missing_participants()
+        self.get_logger().error(
+            f"✗ Barrier '{barrier.barrier_id}' ({barrier_type}) TIMEOUT - "
+            f"missing drones: {missing}"
+        )
+        
+        # Consider missing drones as potentially failed
+        for drone_id in missing:
+            self.get_logger().warning(
+                f"Drone {drone_id} failed to reach {barrier_type} barrier - "
+                f"may need re-allocation"
+            )
+        
+        # Publish barrier timeout event
+        msg = String()
+        msg.data = json.dumps({
+            'event': 'barrier_timeout',
+            'barrier_id': barrier.barrier_id,
+            'barrier_type': barrier_type,
+            'missing_participants': missing,
+            'arrived_participants': list(barrier.arrived)
+        })
+        self.squadron_status_pub.publish(msg)
+    
+    def handle_drone_barrier_arrival(self, drone_id: str, barrier_id: str):
+        """
+        Handle a drone arriving at a barrier.
+        Called when TEE reports reaching a sync point.
+        """
+        barrier = self.barrier_manager.get_barrier(barrier_id)
+        if barrier:
+            barrier.arrive(drone_id)
+            self.get_logger().debug(
+                f"Drone {drone_id} arrived at barrier {barrier_id} "
+                f"({len(barrier.arrived)}/{len(barrier.participants)})"
+            )
     
     def _formation_command_callback(self, msg: String):
         """Handle formation control commands"""
@@ -541,13 +832,26 @@ class SquadronManagerNode(Node):
                 f"battery={drone.battery_percentage:.1f}%"
             )
             
-            # If drone has a task, consider reallocation
+            # If drone has a task, trigger re-allocation
             if drone.current_task_id:
+                mission_id = drone.current_task_id
+                
                 self.get_logger().warning(
-                    f"Drone {drone.drone_id} has active task {drone.current_task_id} "
-                    f"but is unhealthy - consider reallocation"
+                    f"Drone {drone.drone_id} has active task {mission_id} "
+                    f"but is unhealthy - triggering re-allocation"
                 )
-                # TODO: Implement task reallocation
+                
+                # Handle as a failure for re-allocation
+                self._handle_drone_failure_barriers(drone.drone_id)
+                self._handle_mission_failure(
+                    drone.drone_id,
+                    mission_id,
+                    {
+                        'state': 'failed',
+                        'error': f'Drone unhealthy: {drone.state.name}',
+                        'progress': drone.task_progress
+                    }
+                )
     
     def _publish_squadron_status(self):
         """Publish squadron status"""

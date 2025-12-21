@@ -149,6 +149,46 @@ class FormationController:
         self.logger.info(f"Added {drone.drone_id} to formation")
         return True
     
+    def get_formation_positions(
+        self,
+        drones: List[DroneInfo],
+        params: FormationParameters
+    ) -> Dict[str, Tuple[float, float, float]]:
+        """
+        Calculate and return formation positions without activating the formation.
+        
+        Args:
+            drones: List of drones to include in formation
+            params: Formation parameters
+            
+        Returns:
+            Dict mapping drone_id to (x, y, z) offset from formation center
+        """
+        # Calculate positions based on formation type
+        if params.formation_type == FormationType.LINE:
+            positions = self._calculate_line_formation(drones, params)
+        elif params.formation_type == FormationType.WEDGE:
+            positions = self._calculate_wedge_formation(drones, params)
+        elif params.formation_type == FormationType.GRID:
+            positions = self._calculate_grid_formation(drones, params)
+        elif params.formation_type == FormationType.CIRCLE:
+            positions = self._calculate_circle_formation(drones, params)
+        elif params.formation_type == FormationType.COLUMN:
+            positions = self._calculate_column_formation(drones, params)
+        else:
+            # Return simple offsets for unknown formation
+            positions = {}
+            for i, drone in enumerate(drones):
+                positions[drone.drone_id] = (i * params.spacing, 0.0, 0.0)
+        
+        # Convert absolute positions to offsets from center
+        center_x, center_y, center_z = params.center
+        offsets = {}
+        for drone_id, (x, y, z) in positions.items():
+            offsets[drone_id] = (x - center_x, y - center_y, 0.0)  # Keep altitude same
+        
+        return offsets
+    
     def check_formation_integrity(self, drones: List[DroneInfo]) -> Dict[str, float]:
         """
         Check how well drones are maintaining formation.
